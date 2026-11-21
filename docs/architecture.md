@@ -1,0 +1,23 @@
+# Architecture
+
+## Timer action
+
+The React Native screen collects the duration and displays the result of the request. The TypeScript TurboModule spec defines `requestTimer(durationSeconds)`. React Native Codegen generates the Android interface, and `TimerPackage` registers its Kotlin implementation.
+
+Kotlin validates whole seconds in the Android range of 1–86,400, requires a resumed activity, and dispatches `AlarmClock.ACTION_SET_TIMER` on the UI thread. The manifest declares `com.android.alarm.permission.SET_ALARM`. The clock app owns the countdown. The promise resolves once Android accepts the activity launch, and this intent provides no standard callback for countdown verification.
+
+## Execution runtime
+
+Keep conversational state, streaming, and rendering in React Native. Add a model-agnostic planner that emits typed action requests, with one Kotlin runtime responsible for capability checks, approval state, execution, cancellation, and verification. Start with explicit Android APIs, intents, and app integrations. For a music integration, record a playback result only if an authorized media session or app API exposes enough evidence to identify the requested track and its playback state. Preserve the distinction between dispatch and verification across the runtime and UI.
+
+Persist task state before adding work that outlives the React Activity. Resume only operations with a known retry policy. For a side effect with an unknown outcome, check before retrying to avoid duplicate actions. Consider WorkManager for deferrable work and a user-visible foreground service only when Android allows that service type and launch. A user-selected assistant entry point via `ACTION_ASSIST` or `VoiceInteractionService` is a separate integration. The timer action currently starts in the foreground and Clock keeps it running. [Background activity launches](https://developer.android.com/guide/components/activities/secure-bal) · [VoiceInteractionService](https://developer.android.com/reference/android/service/voice/VoiceInteractionService)
+
+Keep permissions scoped to each capability. Require review before sensitive actions and make cancellation available while work is active. Keep raw screen contents and notification text out of model requests by default. If MCP is added, route its tools through the same action validation and approval path. A future OpenAI integration would require separate API credentials and billing. A ChatGPT Plus subscription does not supply an API key. [OpenAI API billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform)
+
+## Isolated display feasibility
+
+A normal app can create a private, own-content virtual display. Starting an activity on it also requires that Android allow the activity on that display. `ActivityOptions.setLaunchDisplayId` is available from API 26 and requires the device’s secondary-activity display feature. On API 29 and newer, use `ActivityManager.isActivityStartAllowedOnDisplay` with the actual target intent and display. Android restricts cross-app launches on untrusted virtual displays, so a display owned by the app is insufficient for general third-party UI automation. [ActivityOptions](https://developer.android.com/reference/android/app/ActivityOptions#setLaunchDisplayId(int)) · [AOSP activity launch policy](https://source.android.com/docs/core/display/multi_display/activity-launch)
+
+Trusted display and companion app-streaming paths have separate system permission and association requirements. Explore ADB or Shizuku as opt-in development paths on real hardware. ADB-backed Shizuku runs with shell permissions, which vary by Android build. Wireless setup requires Android 11 or newer, and an ADB-backed service must be started again after reboot. Treat app launch, readable output, input targeting, and concurrent use of the main display as separate pass criteria. Verify each on a stock Pixel 9 for the intended apps and Android build before offering the mode. [AOSP virtual-device sample](https://android.googlesource.com/platform/development/+/35af5c328/samples/VirtualDeviceManager/) · [Shizuku setup](https://shizuku.rikka.app/guide/setup/)
+
+Visual or Accessibility-based integration requires its own review. Google Play prohibits general autonomous planning and execution through its Accessibility API, with a narrow exception for verified accessibility tools serving people with disabilities as their core purpose. Plan the Play build around explicit integrations and narrowly scoped APIs. [Google Play AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491)
