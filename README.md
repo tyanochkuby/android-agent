@@ -47,6 +47,10 @@ Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps insta
 3. Tap **Find and open Google Maps**. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The search should list Google Maps and the open step should report **Google Maps window verified**. With the service disabled, the open step should report `issued`.
 4. Force-stop and reopen Android Agent. The latest task should still be visible. A recorded `issued` or verified action should retain that status without another launch.
 
+## Maps workflow smoke test
+
+Use an English-language debug build with Google Maps installed and online. Enable **Android Agent window verification** in Accessibility settings. Leave Maps on its Explore screen, return to Android Agent, and tap **Directions to Warsaw Central Station**. The workflow selects the station and opens the directions screen. Check that the destination is Warsaw Central. Maps may ask for a starting point depending on location settings. Return to Android Agent to see the result.
+
 ## License
 
 [MIT](LICENSE)

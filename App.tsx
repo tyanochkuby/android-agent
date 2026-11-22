@@ -11,6 +11,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { appLabels, mapsSteps, tasks } from './src/tasks';
 import type { Task, TaskRequest } from './src/tasks';
+import { openStationDirections } from './src/mapsWorkflow';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
@@ -178,6 +179,23 @@ export default function App() {
             {__DEV__ && (
               <Pressable
                 accessibilityRole="button"
+                disabled={busy}
+                onPress={() =>
+                  handle(async () => {
+                    const destination = await openStationDirections();
+                    setStatus(`Directions screen opened. ${destination}.`);
+                  })
+                }
+                style={styles.preset}
+              >
+                <Text style={styles.presetText}>
+                  Directions to Warsaw Central Station
+                </Text>
+              </Pressable>
+            )}
+            {__DEV__ && (
+              <Pressable
+                accessibilityRole="button"
                 onPress={() => handle(tasks.openAccessibilitySettings)}
                 style={styles.preset}
               >
@@ -226,7 +244,7 @@ export default function App() {
                   <Text style={styles.buttonText}>Continue task</Text>
                 </Pressable>
               )}
-              {busy && !task.cancelled && (
+              {(running || paused) && !task.cancelled && (
                 <Pressable
                   accessibilityRole="button"
                   disabled={pending}
