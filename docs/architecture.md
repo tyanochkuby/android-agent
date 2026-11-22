@@ -23,7 +23,7 @@ Starting a timer uses `AlarmClock.ACTION_SET_TIMER` and can report `ISSUED`. The
 
 When Android kills the process, the app reconciles interrupted work when the verifier reconnects or the caller next reads or sends a command. An interrupted open can be marked successful if its target is currently observable. An interrupted timer or an open without evidence becomes `UNKNOWN`. Inspect the external outcome before intentionally submitting another action. Unstarted calls and interrupted reads require confirmation to continue. The executor does not replay interrupted side effects.
 
-The executor lives in the Android application scope and can record results after the React Native Activity pauses. A foreground handoff, lock, or loss of the confirmed Activity session requires an explicit **Continue task** before another UI action can run. The first slice never injects gestures into the target app. It records the app-window observation during the handoff when available. The user can keep using their phone while read-only calls finish.
+The executor lives in the Android application scope and can record results after the React Native Activity pauses. A foreground handoff, lock, or loss of window focus in the confirmed Activity requires an explicit **Continue task** before another UI action can run. The first slice never injects gestures into the target app. It records the app-window observation during the handoff when available. The user can keep using their phone while read-only calls finish.
 
 ## Permissions and workflows
 

@@ -1,20 +1,29 @@
 package io.github.tyanochkuby.androidagent.tasks
 
-import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
-internal class TaskExecutor(context: Context) {
-  private val journal = TaskJournal(context)
-  private val actions = AndroidActions(context)
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+internal interface TaskStore {
+  suspend fun read(id: String?): Task?
+  suspend fun save(task: Task)
+}
+
+internal interface TaskActions {
+  val foregroundSessionId: Long?
+  suspend fun execute(task: Task, step: Step, session: Long?): StepState
+  fun recover(task: Task, step: Step): StepState
+}
+
+internal class TaskExecutor(
+  private val journal: TaskStore,
+  private val actions: TaskActions,
+  private val scope: CoroutineScope,
+) {
   private val lock = Mutex()
   private var initialized = false
   private var current: Task? = null
@@ -23,12 +32,12 @@ internal class TaskExecutor(context: Context) {
 
   suspend fun submit(request: TaskRequest): Task = command {
     initialize()
-    load(request.id)?.let {
+    journal.read(request.id)?.let {
       require(it.request == request) { "This task ID belongs to a different request." }
       return@command it
     }
     check(current?.finished != false) { "Finish or cancel the current task first." }
-    session = actions.foregroundSession?.id
+    session = actions.foregroundSessionId
     save(Task(request)).also { schedule() }
   }
 
@@ -38,14 +47,14 @@ internal class TaskExecutor(context: Context) {
 
   suspend fun read(id: String?): Task? = command {
     initialize()
-    if (id == null || current?.request?.id == id) current else load(id)
+    if (id == null || current?.request?.id == id) current else journal.read(id)
   }
 
   suspend fun resume(id: String): Task = command {
     initialize()
     val task = active(id)
     check(task.states.values.any { it.phase == Phase.PAUSED }) { "No paused steps to resume." }
-    session = checkNotNull(actions.foregroundSession?.id) { "Unlock the device and open Android Agent." }
+    session = checkNotNull(actions.foregroundSessionId) { "Unlock the device and open Android Agent." }
     val resumed = task.request.steps.fold(task) { next, step ->
       if (next.states.getValue(step.id).phase == Phase.PAUSED) next.transition(step.id, StepState())
       else next
@@ -75,7 +84,7 @@ internal class TaskExecutor(context: Context) {
   private suspend fun initialize() {
     journalFailure?.let { throw IllegalStateException("Task journal failed. Restart Android Agent.", it) }
     if (initialized) return
-    val saved = load(null)
+    val saved = journal.read(null)
     if (saved != null) {
       val recovered = saved.request.steps.fold(saved) { next, step ->
         val phase = next.states.getValue(step.id).phase
@@ -91,19 +100,23 @@ internal class TaskExecutor(context: Context) {
     schedule()
   }
 
-  private suspend fun load(id: String?): Task? = withContext(Dispatchers.IO) { journal.read(id) }
-
   private suspend fun save(task: Task): Task {
-    withContext(Dispatchers.IO) { journal.save(task) }
+    journal.save(task)
     current = task
     return task
   }
 
   private fun schedule() = launchWorker { pump() }
 
-  private suspend fun pump(): Unit = lock.withLock {
-    var task = current ?: return@withLock
-    if (journalFailure != null || task.finished) return@withLock
+  private suspend fun pump() {
+    while (lock.withLock { advance() }) {
+      // Let completed calls record their outcomes before reserving another slot.
+    }
+  }
+
+  private suspend fun advance(): Boolean {
+    var task = current ?: return false
+    if (journalFailure != null || task.finished) return false
     while (true) {
       val skipped = task.request.steps.firstNotNullOfOrNull { step ->
         val phase = task.states.getValue(step.id).phase
@@ -113,20 +126,19 @@ internal class TaskExecutor(context: Context) {
       task = save(task.transition(skipped.first, StepState(Phase.SKIPPED, detail = skipped.second)))
     }
 
-    while (true) {
-      val step = task.nextStep() ?: break
-      val confirmed = session
-      if (step.action.requiresForeground && (confirmed == null || actions.foregroundSession?.id != confirmed)) {
-        task = save(task.transition(step.id, foregroundPause))
-        continue
-      }
-
-      task = save(task.transition(step.id, StepState(Phase.RUNNING)))
-      execute(task, step, confirmed)
+    val step = task.nextStep() ?: return false
+    val confirmed = session
+    if (step.action.requiresForeground && (confirmed == null || actions.foregroundSessionId != confirmed)) {
+      save(task.transition(step.id, foregroundPause))
+      return true
     }
+
+    val running = save(task.transition(step.id, StepState(Phase.RUNNING)))
+    execute(running, step, confirmed)
+    return true
   }
 
-  private fun execute(task: Task, step: Step, confirmed: Long?) = launchWorker {
+  private fun execute(task: Task, step: Step, confirmed: Long?) = launchWorker(CoroutineStart.UNDISPATCHED) {
     val outcome = try {
       actions.execute(task, step, confirmed)
     } catch (error: CancellationException) {
@@ -148,14 +160,14 @@ internal class TaskExecutor(context: Context) {
     pump()
   }
 
-  private fun launchWorker(work: suspend () -> Unit) {
-    scope.launch {
+  private fun launchWorker(start: CoroutineStart = CoroutineStart.DEFAULT, work: suspend () -> Unit) {
+    scope.launch(start = start) {
       try {
         work()
       } catch (error: CancellationException) {
         throw error
       } catch (error: Exception) {
-        lock.withLock { journalFailure = error }
+        journalFailure = error
       }
     }
   }

@@ -10,15 +10,17 @@ import android.provider.AlarmClock
 import io.github.tyanochkuby.androidagent.MainActivity
 import kotlinx.coroutines.delay
 
-internal class AndroidActions(private val context: Context) {
-  val foregroundSession get() = MainActivity.foregroundSession
+internal class AndroidActions(private val context: Context) : TaskActions {
+  override val foregroundSessionId get() = foregroundSession?.id
+
+  private val foregroundSession get() = MainActivity.foregroundSession
     ?.takeIf { !it.activity.isFinishing && !it.activity.isDestroyed && screenAvailable }
 
   private val screenAvailable get() =
     context.getSystemService(PowerManager::class.java).isInteractive &&
       !context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
 
-  suspend fun execute(task: Task, step: Step, session: Long?): StepState =
+  override suspend fun execute(task: Task, step: Step, session: Long?): StepState =
     try {
       when (val action = step.action) {
         is Action.Search -> StepState(
@@ -62,7 +64,7 @@ internal class AndroidActions(private val context: Context) {
       StepState(Phase.FAILED, detail = error.message)
     }
 
-  fun recover(task: Task, step: Step): StepState {
+  override fun recover(task: Task, step: Step): StepState {
     return when (val action = step.action) {
       is Action.Search, is Action.Observe ->
         StepState(Phase.PAUSED, detail = "The app stopped. Confirm to repeat this read.")
