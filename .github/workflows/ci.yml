@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    name: Jest and React Doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+        id: install
+      - run: npm test -- --runInBand
+      - name: React Doctor
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx --yes react-doctor@0.9.23 --no-telemetry --blocking none
+
+  kotlin:
+    name: Kotlin unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - run: npm ci
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-37.0 build-tools;37.0.0 ndk;27.1.12297006 cmake;3.22.1
+      - run: ./gradlew :app:testDebugUnitTest
+        working-directory: android

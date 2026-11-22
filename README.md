@@ -1,8 +1,8 @@
 # Android Agent
 
-Android Agent is an Android-first assistant project. The first action sends a timer request to the device’s clock app. Pick 1, 5, or 10 minutes and tap **Start timer**. The app reports the handoff. Open Clock to verify that the countdown is running.
+Android Agent is an Android-first assistant project. The demo runs two local tasks. **Start timer** sends a timer request to Clock. **Find and open Google Maps** looks up an installed app and uses the typed search result to open it. Both show their saved step status when you return to Android Agent. Neither needs an account or model provider.
 
-The timer works locally without a model, account, or subscription. See [the architecture and Android constraints](docs/architecture.md) for the planned execution runtime and integration strategy.
+See [the architecture and Android constraints](docs/architecture.md) for the Kotlin executor contract, recovery behavior, and app verification.
 
 ## Development setup
 
@@ -35,10 +35,17 @@ If the app loads but Fast Refresh disconnects on the emulator, run `adb reverse 
 npm run lint
 npm run typecheck
 npm test -- --runInBand
-(cd android && ./gradlew :app:assembleDebug :app:lintDebug)
+(cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug)
 ```
 
-The Jest tests cover duration selection, bridge calls, and error recovery. On a device, select **1 min**, tap **Start timer**, and open Clock to confirm it is counting down from one minute. Repeat with **10 min** to check the default duration, then dismiss the test timers. `ACTION_SET_TIMER` asks the clock app to start the timer and skip its setup screen. Some handlers may still show UI. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
+## Device smoke test
+
+Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps installed. An API 36 Google APIs emulator with those apps can exercise the same flow.
+
+1. Pick **1 min** and tap **Start timer**. Open Clock to confirm the countdown and dismiss the test timer. In Android Agent, the saved step reads `issued`. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
+2. Tap **Accessibility settings**, enable **Android Agent window verification**, and return to Android Agent. Android may require allowing restricted settings for the sideloaded app before it can enable the service.
+3. Tap **Find and open Google Maps**. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The search should list Google Maps and the open step should report **Google Maps window verified**. With the service disabled, the open step should report `issued`.
+4. Force-stop and reopen Android Agent. The latest task should still be visible. A recorded `issued` or verified action should retain that status without another launch.
 
 ## License
 

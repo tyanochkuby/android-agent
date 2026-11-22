@@ -5,15 +5,15 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 
-class TimerPackage : BaseReactPackage() {
+class TaskPackage : BaseReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext) =
-    if (name == TimerModule.NAME) TimerModule(reactContext) else null
+    if (name == TaskModule.NAME) TaskModule(reactContext) else null
 
   override fun getReactModuleInfoProvider() = ReactModuleInfoProvider {
     mapOf(
-      TimerModule.NAME to ReactModuleInfo(
-        name = TimerModule.NAME,
-        className = TimerModule::class.java.name,
+      TaskModule.NAME to ReactModuleInfo(
+        name = TaskModule.NAME,
+        className = TaskModule::class.java.name,
         canOverrideExistingModule = false,
         needsEagerInit = false,
         isCxxModule = false,
