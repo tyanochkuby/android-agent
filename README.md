@@ -47,9 +47,18 @@ Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps insta
 3. Tap **Find and open Google Maps**. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The search should list Google Maps and the open step should report **Google Maps window verified**. With the service disabled, the open step should report `issued`.
 4. Force-stop and reopen Android Agent. The latest task should still be visible. A recorded `issued` or verified action should retain that status without another launch.
 
-## Maps workflow smoke test
+## Android integration tests
 
-Use an English-language debug build with Google Maps installed and online. Enable **Android Agent window verification** in Accessibility settings. Leave Maps on its Explore screen, return to Android Agent, and tap **Directions to Warsaw Central Station**. The workflow selects the station and opens the directions screen. Check that the destination is Warsaw Central. Maps may ask for a starting point depending on location settings. Return to Android Agent to see the result.
+The **Nightly Android integration** workflow runs on `main` at 02:23 UTC and can also be launched from the Actions tab. It uses a disposable API 36 emulator to exercise text entry, stale-selection rejection, result selection, destination verification, and session shutdown when another app takes the foreground. Failed runs upload Metro and Android logs.
+
+To run it locally, start a disposable API 36 emulator, stop any Metro server on port 8081, and put `adb` on your path. Use the emulator's ABI in the Gradle command.
+
+```sh
+(cd android && ./gradlew :app:assembleDebug :fixture:assembleDebug -PintegrationFixture -PreactNativeArchitectures=arm64-v8a)
+bash integration/run.sh
+```
+
+The live [Maps workflow](integration/mapsWorkflow.ts) is a separate smoke example. Start Metro with `ANDROID_AGENT_INTEGRATION=1 npm start` and launch the debug app. On an English-language emulator with Maps installed and online, enable **Android Agent window verification** in Accessibility settings. Leave Maps on its Explore screen, return to the test harness, and tap **Run Maps workflow**. The workflow checks that the Directions screen shows Warsaw Central as the destination. Maps may ask for a starting point depending on location settings.
 
 ## License
 

@@ -1,4 +1,4 @@
-import { actOn, runUiWorkflow, select } from './uiWorkflow';
+import { actOn, runUiWorkflow, select } from '../src/uiWorkflow';
 
 export function openStationDirections() {
   return runUiWorkflow('com.google.android.apps.maps', async ui => {

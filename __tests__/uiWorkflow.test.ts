@@ -1,5 +1,5 @@
 import NativeTasks from '../src/native/NativeTasks';
-import { openStationDirections } from '../src/mapsWorkflow';
+import { openStationDirections } from '../integration/mapsWorkflow';
 
 jest.mock('../src/native/NativeTasks', () => ({
   __esModule: true,
