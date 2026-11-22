@@ -42,7 +42,8 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v5
       - run: npm ci
-      - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-37.0 build-tools;37.0.0 ndk;27.1.12297006 cmake;3.22.1
       - run: ./gradlew :app:testDebugUnitTest
         working-directory: android
