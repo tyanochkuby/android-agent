@@ -1,18 +1,39 @@
 # Architecture
 
-## Timer action
+## Execution contract
 
-The React Native screen collects the duration and displays the result of the request. The TypeScript TurboModule spec defines `requestTimer(durationSeconds)`. React Native Codegen generates the Android interface, and `TimerPackage` registers its Kotlin implementation.
+TypeScript owns the caller. Today the React Native UI submits a timer call or a Google Maps batch. A future TypeScript agent loop can submit one call, inspect its result, and decide what to do next. It can also submit a batch when it already knows the dependencies. The same API supports both flows.
 
-Kotlin validates whole seconds in the Android range of 1–86,400, requires a resumed activity, and dispatches `AlarmClock.ACTION_SET_TIMER` on the UI thread. The manifest declares `com.android.alarm.permission.SET_ALARM`. The clock app owns the countdown. The promise resolves once Android accepts the activity launch, and this intent provides no standard callback for countdown verification.
+A task has a caller-chosen ID and up to 32 typed calls. The Kotlin boundary validates arguments, dependency cycles, and result references before accepting any work. An app search returns a list of supported installed apps. An `apps.open` or `apps.observe` call may bind that list to its target if it contains exactly one app. Empty and ambiguous searches remain visible to the caller, which can refine the query or pick a specific supported app. `after` provides ordering. A dependency satisfied by `ISSUED` means the request was dispatched. For evidence-dependent decisions, inspect the structured result.
 
-## Execution runtime
+Kotlin accepts one active task and runs up to four ready calls at once, with one foreground action at a time. `FAIL_FAST` stops scheduling after the first failed or unknown outcome is recorded. `CONTINUE_INDEPENDENT` skips dependent calls and lets unrelated calls proceed. Cancelling skips queued and paused calls. Already started actions can finish recording their results. There is no rollback for an external action.
 
-Keep conversational state, streaming, and rendering in React Native. Add a model-agnostic planner that emits typed action requests, with one Kotlin runtime responsible for capability checks, approval state, execution, cancellation, and verification. Start with explicit Android APIs, intents, and app integrations. For a music integration, record a playback result only if an authorized media session or app API exposes enough evidence to identify the requested track and its playback state. Preserve the distinction between dispatch and verification across the runtime and UI.
+## State and recovery
 
-Persist task state before adding work that outlives the React Activity. Resume only operations with a known retry policy. For a side effect with an unknown outcome, check before retrying to avoid duplicate actions. Consider WorkManager for deferrable work and a user-visible foreground service only when Android allows that service type and launch. A user-selected assistant entry point via `ACTION_ASSIST` or `VoiceInteractionService` is a separate integration. The timer action currently starts in the foreground and Clock keeps it running. [Background activity launches](https://developer.android.com/guide/components/activities/secure-bal) · [VoiceInteractionService](https://developer.android.com/reference/android/service/voice/VoiceInteractionService)
+```text
+QUEUED → RUNNING → SUCCEEDED | ISSUED | FAILED | UNKNOWN
+   │         │
+   └─────→ PAUSED → QUEUED
+QUEUED or PAUSED → SKIPPED
+```
 
-Keep permissions scoped to each capability. Require review before sensitive actions and make cancellation available while work is active. Keep raw screen contents and notification text out of model requests by default. If MCP is added, route its tools through the same action validation and approval path. A future OpenAI integration would require separate API credentials and billing. A ChatGPT Plus subscription does not supply an API key. [OpenAI API billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform)
+The executor writes each transition to a private SQLite journal. In particular, `RUNNING` is committed before an adapter can issue a side effect. Submitting an identical request with the same ID returns its saved state. A different request needs a new ID.
+
+Starting a timer uses `AlarmClock.ACTION_SET_TIMER` and can report `ISSUED`. The Clock app owns the countdown and the intent provides no verification callback. Opening a supported app verifies the target package against Android's active Accessibility window where available. The evidence establishes which app had the active window at the recorded time.
+
+When Android kills the process, the app reconciles interrupted work when the verifier reconnects or the caller next reads or sends a command. An interrupted open can be marked successful if its target is currently observable. An interrupted timer or an open without evidence becomes `UNKNOWN`. Inspect the external outcome before intentionally submitting another action. Unstarted calls and interrupted reads require confirmation to continue. The executor does not replay interrupted side effects.
+
+The executor lives in the Android application scope and can record results after the React Native Activity pauses. A foreground handoff, lock, or loss of the confirmed Activity session requires an explicit **Continue task** before another UI action can run. The first slice never injects gestures into the target app. It records the app-window observation during the handoff when available. The user can keep using their phone while read-only calls finish.
+
+## Permissions and workflows
+
+The current allow-all mode covers the typed timer and supported app operations. Debug builds include an opt-in Accessibility service for foreground app evidence. It reads the active window's package and persists only the supported target, whether it matched, and when. Search queries and timer durations are local task inputs. Richer observations would need explicit consent for the task before collection or transmission. This slice sends no observation data to a model provider.
+
+Claude Code dynamic workflows show how JavaScript can branch on results and coordinate callers with a small set of allowed primitives. On Android, a comparable experiment could expose only the typed calls and journal reads, with results checkpointed by call ID so restarting a script does not replay side effects. [Claude dynamic workflows](https://platform.claude.com/cookbook/claude-agent-sdk-08-dynamic-workflows)
+
+Repository-authored TypeScript can use regular control flow around `tasks.submit` and `tasks.read`, or hand a known dependency group to Kotlin. A model-authored workflow would need an isolated runtime with scoped tools, time limits, and a clear lifecycle. The same typed executor API can be the boundary for evaluating that approach later.
+
+The timer and app launches require a resumed Android Agent Activity and an unlocked, interactive screen. For future deferrable work, consider WorkManager. A user-visible foreground service or assistant entry point has separate Android requirements. [Background activity launches](https://developer.android.com/guide/components/activities/secure-bal) · [VoiceInteractionService](https://developer.android.com/reference/android/service/voice/VoiceInteractionService)
 
 ## Isolated display feasibility
 
