@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.serialization.Serializable
 
@@ -29,7 +30,9 @@ internal class UiSession(
 ) {
   private val launchDeadline = SystemClock.elapsedRealtime() + 10_000
   private val expiresAt = SystemClock.elapsedRealtime() + 60_000
-  private var snapshot: UiSnapshot? = null
+  private data class SelectionSnapshot(val ui: UiSnapshot, val identities: List<String>)
+
+  private var snapshot: SelectionSnapshot? = null
   private var windowId: Int? = null
   private var stopped = false
 
@@ -40,25 +43,32 @@ internal class UiSession(
 
   fun observe(): UiSnapshot? = withRoot { root ->
     val elements = mutableListOf<UiElement>()
-    collect(root, emptyList(), elements, intArrayOf(0))
-    UiSnapshot(UUID.randomUUID().toString(), root.windowId, elements).also { snapshot = it }
+    val identities = mutableListOf<String>()
+    collect(root, emptyList(), elements, identities, intArrayOf(0))
+    UiSnapshot(UUID.randomUUID().toString(), root.windowId, elements).also {
+      snapshot = SelectionSnapshot(it, identities)
+    }
   }
 
   fun act(snapshotId: String, elementIndex: Int, witnessIndex: Int, text: String?): String {
     val previous = snapshot
     snapshot = null
-    if (previous?.id != snapshotId) return "stale"
-    val expected = previous.elements.getOrNull(elementIndex)
+    if (previous?.ui?.id != snapshotId) return "stale"
+    val expected = previous.ui.elements.getOrNull(elementIndex)
       ?: error("This element is not in the snapshot.")
-    val witness = previous.elements.getOrNull(witnessIndex)
+    val witness = previous.ui.elements.getOrNull(witnessIndex)
       ?: error("This element is not in the snapshot.")
     check(witness.path.take(expected.path.size) == expected.path) { "The label must belong to the target element." }
     val accepted = withRoot { root ->
-      if (root.windowId != previous.windowId ||
-        atPath(root, witness.path, 0) { describe(it, witness.path) } != witness
+      if (root.windowId != previous.ui.windowId ||
+        atPath(root, witness.path, 0) {
+          describe(it, witness.path) == witness && identity(it) == previous.identities[witnessIndex]
+        } != true
       ) return@withRoot null
       atPath(root, expected.path, 0) { node ->
-        if (describe(node, expected.path) != expected) return@atPath null
+        if (describe(node, expected.path) != expected || identity(node) != previous.identities[elementIndex]) {
+          return@atPath null
+        }
         if (text == null) {
           check(expected.clickable) { "This element does not support click." }
           node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -106,12 +116,16 @@ internal class UiSession(
     }
   }
 
-  private fun collect(node: AccessibilityNodeInfo, path: List<Int>, elements: MutableList<UiElement>, visited: IntArray) {
+  private fun collect(node: AccessibilityNodeInfo, path: List<Int>, elements: MutableList<UiElement>, identities: MutableList<String>, visited: IntArray) {
     if (visited[0]++ >= 400 || path.size > 20) return
-    describe(node, path)?.let(elements::add)
+    if (node.packageName?.toString() != targetPackage) return
+    describe(node, path)?.let {
+      elements.add(it)
+      identities.add(identity(node))
+    }
     for (index in 0 until node.childCount) {
       if (visited[0] >= 400) break
-      node.getChild(index)?.let { child -> useNode(child) { collect(child, path + index, elements, visited) } }
+      node.getChild(index)?.let { child -> useNode(child) { collect(child, path + index, elements, identities, visited) } }
     }
   }
 
@@ -127,7 +141,19 @@ internal class UiSession(
     return UiElement(path, label, node.contentDescription?.toString()?.take(200), node.viewIdResourceName, node.className?.toString(), editable, clickable)
   }
 
+  private fun identity(node: AccessibilityNodeInfo): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    for (value in listOf(node.text, node.contentDescription)) {
+      val text = value?.toString().orEmpty()
+      digest.update(text.length.toString().toByteArray())
+      digest.update(0)
+      digest.update(text.toByteArray())
+    }
+    return android.util.Base64.encodeToString(digest.digest(), android.util.Base64.NO_WRAP)
+  }
+
   private fun <T> atPath(root: AccessibilityNodeInfo, path: List<Int>, depth: Int, block: (AccessibilityNodeInfo) -> T): T? {
+    if (root.packageName?.toString() != targetPackage) return null
     if (depth == path.size) return block(root)
     val child = root.getChild(path[depth]) ?: return null
     return useNode(child) { atPath(child, path, depth + 1, block) }

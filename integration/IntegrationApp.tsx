@@ -61,8 +61,10 @@ export default function IntegrationApp() {
     setStatus('Running');
     try {
       await work();
+      console.info('ANDROID_AGENT_INTEGRATION_PASSED');
       setStatus('Integration passed');
     } catch (error) {
+      console.info('ANDROID_AGENT_INTEGRATION_FAILED');
       setStatus(`Integration failed: ${String(error)}`);
     }
   }

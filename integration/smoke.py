@@ -74,6 +74,7 @@ def main():
             "the Accessibility service",
         )
         left, top, right, bottom = map(int, re.findall(r"\d+", button.attrib["bounds"]))
+        pid = adb("shell", "pidof", APP).strip()
         adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
         wait_for_state(
             lambda: adb("shell", "dumpsys", "activity", "activities"),
@@ -84,6 +85,16 @@ def main():
             "the Settings activity launched from the fixture",
         )
 
+        def workflow_passed(logs):
+            if "ANDROID_AGENT_INTEGRATION_FAILED" in logs:
+                raise AssertionError("The workflow reported a failure.")
+            return "ANDROID_AGENT_INTEGRATION_PASSED" in logs
+
+        wait_for_state(
+            lambda: adb("logcat", "-d", f"--pid={pid}", "-s", "ReactNativeJS"),
+            workflow_passed,
+            "the workflow result while Settings is open",
+        )
         adb("shell", "am", "start", "-n", f"{APP}/.MainActivity")
         find("Integration passed")
         print("Fixture workflow passed through the React Native bridge and Accessibility.")
