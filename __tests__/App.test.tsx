@@ -128,7 +128,7 @@ test('shows a submission error and allows another request', async () => {
 });
 
 test('foreground events share an in-flight status read', async () => {
-  const subscribe = jest.spyOn(AppState, 'addEventListener');
+  const subscribe = jest.mocked(AppState.addEventListener);
   let finishRead: (value: null) => void = () => {};
   read.mockReturnValueOnce(
     new Promise(resolve => {
@@ -136,22 +136,36 @@ test('foreground events share an in-flight status read', async () => {
     }),
   );
 
-  const view = await render(<App />);
+  await render(<App />);
   const onAppStateChanged = subscribe.mock.lastCall![1];
-  try {
-    await act(async () => {
-      onAppStateChanged('background');
-      onAppStateChanged('active');
-      onAppStateChanged('active');
-      expect(read).toHaveBeenCalledTimes(1);
-      finishRead(null);
-    });
-    await act(async () => {
-      onAppStateChanged('active');
-    });
-    expect(read).toHaveBeenCalledTimes(2);
-  } finally {
-    await view.unmount();
-    subscribe.mockRestore();
-  }
+  await act(async () => {
+    onAppStateChanged('background');
+    onAppStateChanged('active');
+    onAppStateChanged('active');
+    expect(read).toHaveBeenCalledTimes(1);
+    finishRead(null);
+  });
+  await act(async () => {
+    onAppStateChanged('active');
+  });
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+test('shows recovered window evidence alongside an unknown launch outcome', async () => {
+  read.mockResolvedValue(
+    JSON.stringify({
+      request: { id: 'restored', steps: [{ id: 'open' }] },
+      states: {
+        open: {
+          phase: 'UNKNOWN',
+          result: { type: 'window', app: 'MAPS', active: true, observedAt: 1 },
+        },
+      },
+    }),
+  );
+
+  await render(<App />);
+  expect(
+    screen.getByText('open: unknown · Google Maps was active during recovery'),
+  ).toBeTruthy();
 });

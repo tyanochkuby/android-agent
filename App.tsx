@@ -202,7 +202,11 @@ export default function App() {
                     {detail && ` · ${detail}`}
                     {result?.type === 'window' &&
                       result.active &&
-                      ` · ${appLabels[result.app]} window verified`}
+                      (phase === 'UNKNOWN'
+                        ? ` · ${
+                            appLabels[result.app]
+                          } was active during recovery`
+                        : ` · ${appLabels[result.app]} window verified`)}
                     {result?.type === 'matches' &&
                       (result.apps.length === 0
                         ? ' · No matching app'

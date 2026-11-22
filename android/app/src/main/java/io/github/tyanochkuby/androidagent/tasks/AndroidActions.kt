@@ -75,11 +75,7 @@ internal class AndroidActions(private val context: Context) : TaskActions {
           return StepState(Phase.FAILED, detail = error.message)
         }
         val evidence = awaitActiveWindow(app, waitForConnection = true)
-        if (evidence != null) {
-          StepState(Phase.SUCCEEDED, evidence, "The target window was observed during recovery.")
-        } else {
-          interruptedAction
-        }
+        interruptedAction.copy(result = evidence)
       }
       is Action.StartTimer -> interruptedAction
     }

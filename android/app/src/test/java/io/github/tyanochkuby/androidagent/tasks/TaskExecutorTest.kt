@@ -1,6 +1,9 @@
 package io.github.tyanochkuby.androidagent.tasks
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
@@ -36,12 +39,37 @@ class TaskExecutorTest {
     val actions = FakeActions()
     val executor = TaskExecutor(journal, actions, backgroundScope)
 
-    executor.read(null)
+    val recovered = executor.submit(request)
     runCurrent()
 
+    assertEquals(Phase.UNKNOWN, recovered.states.getValue(timer.id).phase)
     assertEquals(Phase.UNKNOWN, journal.task?.states?.get(timer.id)?.phase)
     assertEquals(Phase.SKIPPED, journal.task?.states?.get(open.id)?.phase)
     assertTrue(actions.dispatched.isEmpty())
+  }
+
+  @Test
+  fun `a completed request keeps its result and rejects a changed payload after restart`() = runTest {
+    val journal = MemoryJournal()
+    val originalActions = FakeActions()
+    val request = TaskRequest("task", listOf(timer))
+    TaskExecutor(journal, originalActions, backgroundScope).submit(request)
+    runCurrent()
+    val saved = checkNotNull(journal.task)
+    assertEquals(Phase.ISSUED, saved.states.getValue(timer.id).phase)
+    assertEquals(listOf(timer.id), originalActions.dispatched)
+
+    val restartedActions = FakeActions()
+    val context = backgroundScope.coroutineContext
+    val restartScope = CoroutineScope(context + SupervisorJob(context[Job]))
+    val restarted = TaskExecutor(journal, restartedActions, restartScope)
+    assertEquals(saved, restarted.submit(request))
+    val modified = request.copy(steps = listOf(timer.copy(action = Action.StartTimer(120))))
+    val rejection = runCatching { restarted.submit(modified) }.exceptionOrNull()
+    assertTrue(rejection is IllegalArgumentException)
+    runCurrent()
+    assertEquals(saved, journal.task)
+    assertTrue(restartedActions.dispatched.isEmpty())
   }
 
   @Test
@@ -113,7 +141,7 @@ class TaskExecutorTest {
       val actions = FakeActions().apply {
         recoverOutcome = {
           connected.await()
-          StepState(Phase.SUCCEEDED, evidence)
+          interruptedAction.copy(result = evidence)
         }
       }
       val executor = TaskExecutor(journal, actions, backgroundScope)
@@ -130,8 +158,10 @@ class TaskExecutorTest {
       }
 
       val recovered = checkNotNull(read.await())
+      assertEquals(Phase.UNKNOWN, recovered.states.getValue(open.id).phase)
       assertEquals(evidence, recovered.states.getValue(open.id).result)
-      assertEquals(Phase.PAUSED, recovered.states.getValue(timer.id).phase)
+      runCurrent()
+      assertEquals(Phase.SKIPPED, journal.task?.states?.get(timer.id)?.phase)
       assertTrue(actions.dispatched.isEmpty())
     }
   }
