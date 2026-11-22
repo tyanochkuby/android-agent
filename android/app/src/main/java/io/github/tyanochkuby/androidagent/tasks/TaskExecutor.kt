@@ -16,7 +16,7 @@ internal interface TaskStore {
 internal interface TaskActions {
   val foregroundSessionId: Long?
   suspend fun execute(task: Task, step: Step, session: Long?): StepState
-  fun recover(task: Task, step: Step): StepState
+  suspend fun recover(task: Task, step: Step): StepState
 }
 
 internal class TaskExecutor(

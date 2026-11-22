@@ -1,6 +1,7 @@
 package io.github.tyanochkuby.androidagent.tasks
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -102,6 +103,39 @@ class TaskExecutorTest {
     assertEquals(listOf(observe.id, timer.id), actions.dispatched)
   }
 
+  @Test
+  fun `recovery keeps evidence whether the read or verifier arrives first`() = runTest {
+    val evidence = Result.Window(AppTarget.MAPS, active = true, observedAt = 1)
+    for (readFirst in listOf(true, false)) {
+      val connected = CompletableDeferred<Unit>()
+      val request = TaskRequest("task", listOf(open, timer.copy(after = setOf(open.id))))
+      val journal = MemoryJournal(Task(request).transition(open.id, StepState(Phase.RUNNING)))
+      val actions = FakeActions().apply {
+        recoverOutcome = {
+          connected.await()
+          StepState(Phase.SUCCEEDED, evidence)
+        }
+      }
+      val executor = TaskExecutor(journal, actions, backgroundScope)
+      if (!readFirst) {
+        connected.complete(Unit)
+        executor.reconcile()
+      }
+      val read = async { executor.read(null) }
+      runCurrent()
+      if (readFirst) {
+        assertFalse(read.isCompleted)
+        connected.complete(Unit)
+        executor.reconcile()
+      }
+
+      val recovered = checkNotNull(read.await())
+      assertEquals(evidence, recovered.states.getValue(open.id).result)
+      assertEquals(Phase.PAUSED, recovered.states.getValue(timer.id).phase)
+      assertTrue(actions.dispatched.isEmpty())
+    }
+  }
+
   private class MemoryJournal(var task: Task? = null) : TaskStore {
     var rejectRunningWrite = false
 
@@ -118,12 +152,13 @@ class TaskExecutorTest {
   ) : TaskActions {
     override var foregroundSessionId: Long? = 1
     val dispatched = mutableListOf<String>()
+    var recoverOutcome: suspend () -> StepState = { interruptedAction }
 
     override suspend fun execute(task: Task, step: Step, session: Long?): StepState {
       dispatched += step.id
       return outcome(step)
     }
 
-    override fun recover(task: Task, step: Step) = interruptedAction
+    override suspend fun recover(task: Task, step: Step) = recoverOutcome()
   }
 }

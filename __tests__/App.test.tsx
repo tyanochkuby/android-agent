@@ -1,5 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { AppState } from 'react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import NativeTasks from '../src/native/NativeTasks';
 import type { TaskRequest } from '../src/tasks';
@@ -124,4 +125,33 @@ test('shows a submission error and allows another request', async () => {
   await fireEvent.press(screen.getByRole('button', { name: 'Start timer' }));
   expect(submit).toHaveBeenCalledTimes(2);
   expect(screen.queryByText('Could not save the task.')).toBeNull();
+});
+
+test('foreground events share an in-flight status read', async () => {
+  const subscribe = jest.spyOn(AppState, 'addEventListener');
+  let finishRead: (value: null) => void = () => {};
+  read.mockReturnValueOnce(
+    new Promise(resolve => {
+      finishRead = resolve;
+    }),
+  );
+
+  const view = await render(<App />);
+  const onAppStateChanged = subscribe.mock.lastCall![1];
+  try {
+    await act(async () => {
+      onAppStateChanged('background');
+      onAppStateChanged('active');
+      onAppStateChanged('active');
+      expect(read).toHaveBeenCalledTimes(1);
+      finishRead(null);
+    });
+    await act(async () => {
+      onAppStateChanged('active');
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    await view.unmount();
+    subscribe.mockRestore();
+  }
 });

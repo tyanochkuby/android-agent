@@ -64,13 +64,18 @@ internal class AndroidActions(private val context: Context) : TaskActions {
       StepState(Phase.FAILED, detail = error.message)
     }
 
-  override fun recover(task: Task, step: Step): StepState {
+  override suspend fun recover(task: Task, step: Step): StepState {
     return when (val action = step.action) {
       is Action.Search, is Action.Observe ->
         StepState(Phase.PAUSED, detail = "The app stopped. Confirm to repeat this read.")
       is Action.Open -> {
-        val evidence = runCatching { observe(task.resolve(action.target)) }.getOrNull()
-        if (evidence?.active == true) {
+        val app = try {
+          task.resolve(action.target)
+        } catch (error: IllegalArgumentException) {
+          return StepState(Phase.FAILED, detail = error.message)
+        }
+        val evidence = awaitActiveWindow(app, waitForConnection = true)
+        if (evidence != null) {
           StepState(Phase.SUCCEEDED, evidence, "The target window was observed during recovery.")
         } else {
           interruptedAction
@@ -97,14 +102,20 @@ internal class AndroidActions(private val context: Context) : TaskActions {
   }
 
   private suspend fun verifyOpen(app: AppTarget): StepState {
-    val deadline = SystemClock.elapsedRealtime() + 2_500
-    while (screenAvailable && WindowObserver.connected != null) {
+    val evidence = awaitActiveWindow(app, waitForConnection = false)
+    return if (evidence != null) StepState(Phase.SUCCEEDED, evidence)
+    else StepState(Phase.ISSUED, detail = "App launch requested. The target window was not verified.")
+  }
+
+  private suspend fun awaitActiveWindow(app: AppTarget, waitForConnection: Boolean): Result.Window? {
+    val deadline = SystemClock.elapsedRealtime() + if (waitForConnection) 1_000 else 2_500
+    while (screenAvailable && (waitForConnection || WindowObserver.connected != null)) {
       val evidence = observe(app)
-      if (evidence?.active == true) return StepState(Phase.SUCCEEDED, evidence)
+      if (evidence?.active == true) return evidence
       if (SystemClock.elapsedRealtime() >= deadline) break
       delay(100)
     }
-    return StepState(Phase.ISSUED, detail = "App launch requested. The target window was not verified.")
+    return null
   }
 
   private val AppTarget.label get() = when (this) {

@@ -32,10 +32,13 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    let reading = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function refresh() {
       clearTimeout(timer);
+      if (!active || reading) return;
+      reading = true;
       const version = revision.current;
       try {
         const snapshot = await tasks.read();
@@ -51,6 +54,7 @@ export default function App() {
           );
         }
       }
+      reading = false;
       if (active) setLoading(false);
       if (active && running && AppState.currentState === 'active') {
         timer = setTimeout(refresh, 300);
