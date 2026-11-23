@@ -54,9 +54,9 @@ adb reverse tcp:8765 tcp:8765
 
 1. In **Ask Android Agent**, enter the pairing code printed by the companion, then tap **Sign in with ChatGPT**. After consent in the computer's browser, tap **Check connection**.
 2. Try `Set a timer for 2 minutes and 17 seconds`. Check the countdown in Clock. The app can confirm that it sent the intent to Clock.
-3. To use Maps, first enable **Android Agent window verification** in **Accessibility settings**. Return to Android Agent, enter `Show me directions to Warsaw Central Station in Google Maps`, and opt in to screen sharing for that prompt. Keep Maps in the foreground while the agent works, then return to Android Agent to read its reply. The foreground UI session expires after one minute.
+3. To use Maps, first enable **Android Agent window verification** in **Accessibility settings**. Return to Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview`, and opt in to screen sharing for that prompt. Keep Maps in the foreground while the agent works, then return to Android Agent to read its reply. The foreground UI session expires after one minute.
 
-The model picks one tool per turn and sees the result before choosing its next action. The POC supports one timer request per prompt and foreground UI sessions in Google Maps or Google Calculator. Prompts go to the model. Visible labels and controls from the selected app are shared only when you opt in for that run. Clock works with screen sharing off. The companion uses the first model in the account's eligible catalog.
+The model can run an ordered sequence of tools and use the results to decide what to do next. The POC supports one timer request and one foreground UI session per prompt. UI actions resolve a uniquely matching control on the current screen. Prompts go to the model. Visible labels and controls from the selected app are shared only when you opt in for that run. Clock works with screen sharing off. The companion uses the first model in the account's eligible catalog.
 
 ## Checks
 

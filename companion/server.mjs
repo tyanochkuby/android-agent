@@ -4,6 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { responsesFetch } from './responsesFetch.mjs';
+
+globalThis.fetch = responsesFetch(globalThis.fetch);
 
 const devkit = process.argv[2];
 if (!devkit) {

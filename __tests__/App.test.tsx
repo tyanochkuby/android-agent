@@ -178,7 +178,7 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
   const model = jest
     .fn()
     .mockResolvedValue(
-      '{"tool":"finish","message":"Ready for Android tasks."}',
+      '[{"tool":"finish","message":"Ready for Android tasks."}]',
     );
   bridge.mockReturnValue({ signIn, check, model } satisfies ReturnType<
     typeof companion

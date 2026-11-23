@@ -27,7 +27,7 @@ function device() {
 function decisions(...responses: object[]) {
   const model = jest.fn<ReturnType<Model>, Parameters<Model>>();
   for (const response of responses) {
-    model.mockResolvedValueOnce(JSON.stringify(response));
+    model.mockResolvedValueOnce(JSON.stringify([response]));
   }
   return model;
 }
@@ -50,10 +50,10 @@ test('reports the native timer result and prevents repeating dispatch', async ()
   expect(model.mock.calls[2][1][4].content).toContain('already invoked');
 });
 
-test('uses observed indices and consumes a stale snapshot before acting again', async () => {
+test('resolves each action against a fresh snapshot', async () => {
   const tools = device();
   tools.actUi.mockResolvedValueOnce('stale');
-  tools.observeUi.mockResolvedValueOnce({
+  const oldSnapshot = {
     id: 'maps-old',
     elements: [
       {
@@ -66,12 +66,14 @@ test('uses observed indices and consumes a stale snapshot before acting again', 
         editable: false,
       },
     ],
-  });
-  const click = { tool: 'click', index: 0, witness: 0 };
+  };
+  tools.observeUi
+    .mockResolvedValueOnce(oldSnapshot)
+    .mockResolvedValueOnce(oldSnapshot);
+  const click = { tool: 'click', match: { label: 'Search here' } };
   const model = decisions(
-    { tool: 'open_app', app: 'MAPS' },
+    { tool: 'open_app', packageName: 'com.google.android.apps.maps' },
     { tool: 'observe_ui' },
-    click,
     click,
     { tool: 'observe_ui' },
     click,
@@ -86,12 +88,10 @@ test('uses observed indices and consumes a stale snapshot before acting again', 
     ['maps-old', 0, 0, null],
     ['maps-current', 0, 0, null],
   ]);
-  expect(model.mock.calls[4][1][8].content).toContain(
-    'Observe the current screen',
-  );
-  const observation = JSON.parse(model.mock.calls[2][1][4].content).toolResult;
+  expect(model.mock.calls[3][1][6].content).toContain('screen changed');
+  const observation = JSON.parse(model.mock.calls[2][1][4].content)
+    .toolResults[0].result;
   expect(observation.elements[0]).toEqual({
-    path: [0],
     label: 'Search here',
     description: null,
     resourceId: 'search',
@@ -104,7 +104,7 @@ test('uses observed indices and consumes a stale snapshot before acting again', 
 test('screen sharing defaults off and keeps observations out of model input', async () => {
   const tools = device();
   const model = decisions(
-    { tool: 'open_app', app: 'MAPS' },
+    { tool: 'open_app', packageName: 'com.google.android.apps.maps' },
     { tool: 'observe_ui' },
     { tool: 'finish', message: 'Screen sharing is off.' },
   );
@@ -120,7 +120,7 @@ test('rejects invalid decisions before calling native tools and bounds retries',
   const tools = device();
   const model = jest
     .fn()
-    .mockResolvedValue('{"tool":"start_timer","seconds":0}');
+    .mockResolvedValue('[{"tool":"start_timer","seconds":0}]');
 
   await expect(runAgent('Set a timer', model, tools)).rejects.toThrow(
     'tool limit',
@@ -131,7 +131,10 @@ test('rejects invalid decisions before calling native tools and bounds retries',
 
 test('releases the foreground UI session after inference fails', async () => {
   const tools = device();
-  const model = decisions({ tool: 'open_app', app: 'MAPS' });
+  const model = decisions({
+    tool: 'open_app',
+    packageName: 'com.google.android.apps.maps',
+  });
   model.mockRejectedValueOnce(new Error('Companion disconnected.'));
 
   await expect(runAgent('Open Maps', model, tools, true)).rejects.toThrow(
