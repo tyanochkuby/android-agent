@@ -51,6 +51,10 @@ export const tasks = {
     const snapshot = await NativeTasks.read(id);
     return snapshot === null ? null : JSON.parse(snapshot);
   },
+  async waitForTimer(id: string) {
+    const task: Task = JSON.parse(await NativeTasks.waitForTask(id));
+    return task.states.timer;
+  },
   async resume(id: string): Promise<Task> {
     return JSON.parse(await NativeTasks.resume(id));
   },

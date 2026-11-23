@@ -125,7 +125,7 @@ internal class UiSession(
     }
     for (index in 0 until node.childCount) {
       if (visited[0] >= 400) break
-      node.getChild(index)?.let { child -> useNode(child) { collect(child, path + index, elements, identities, visited) } }
+      childAt(node, index)?.let { child -> useNode(child) { collect(child, path + index, elements, identities, visited) } }
     }
   }
 
@@ -152,10 +152,18 @@ internal class UiSession(
     return android.util.Base64.encodeToString(digest.digest(), android.util.Base64.NO_WRAP)
   }
 
+  private fun childAt(node: AccessibilityNodeInfo, index: Int): AccessibilityNodeInfo? =
+    try {
+      node.getChild(index)
+    } catch (_: IndexOutOfBoundsException) {
+      // The provider can replace the children while a live tree is being read.
+      null
+    }
+
   private fun <T> atPath(root: AccessibilityNodeInfo, path: List<Int>, depth: Int, block: (AccessibilityNodeInfo) -> T): T? {
     if (root.packageName?.toString() != targetPackage) return null
     if (depth == path.size) return block(root)
-    val child = root.getChild(path[depth]) ?: return null
+    val child = childAt(root, path[depth]) ?: return null
     return useNode(child) { atPath(child, path, depth + 1, block) }
   }
 }

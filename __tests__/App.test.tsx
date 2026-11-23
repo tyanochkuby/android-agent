@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import NativeTasks from '../src/native/NativeTasks';
 import type { TaskRequest } from '../src/tasks';
+import { companion } from '../src/companion';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -168,4 +169,54 @@ test('shows recovered window evidence alongside an unknown launch outcome', asyn
   expect(
     screen.getByText('open: unknown · Google Maps was active during recovery'),
   ).toBeTruthy();
+});
+
+test('starts companion sign-in and runs a prompt once plan usage is enabled', async () => {
+  const bridge = jest.spyOn(require('../src/companion'), 'companion');
+  const signIn = jest.fn().mockResolvedValue({ signingIn: true });
+  const check = jest.fn().mockResolvedValue({ ready: true });
+  const model = jest
+    .fn()
+    .mockResolvedValue(
+      '[{"tool":"finish","message":"Ready for Android tasks."}]',
+    );
+  bridge.mockReturnValue({ signIn, check, model } satisfies ReturnType<
+    typeof companion
+  >);
+  try {
+    await render(<App />);
+    await fireEvent.changeText(
+      screen.getByLabelText('Companion pairing code'),
+      'a'.repeat(32),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    expect(
+      screen.getByText(/Finish sign-in on the companion computer/),
+    ).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Check connection' }),
+    );
+    await fireEvent.changeText(
+      screen.getByLabelText('Agent prompt'),
+      'What can you do?',
+    );
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false,
+    );
+    await fireEvent.press(screen.getByRole('checkbox'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false,
+    );
+    expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
+    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(model).toHaveBeenCalledWith(expect.any(String), [
+      { role: 'user', content: 'What can you do?' },
+    ]);
+  } finally {
+    bridge.mockRestore();
+  }
 });
