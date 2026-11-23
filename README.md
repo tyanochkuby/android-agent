@@ -31,11 +31,9 @@ If the app loads but Fast Refresh disconnects on the emulator, run `adb reverse 
 
 ## Prompt runner
 
-The debug app pairs over USB with a local Node.js companion. **Sign in with ChatGPT** opens OpenAI's sign-in page in the companion computer's browser. Approve ChatGPT plan usage there. The companion uses OpenAI's open-source DevKit to authorize and stream inference through the public Responses API. The phone gets model replies and runs tools locally. OAuth credentials stay in the companion process and signing in again is required after restarting it. [OpenAI sign-in guide](https://developers.openai.com/siwc/token-sharing-open-source) · [Inference contract](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+The debug app sends prompts to ChatGPT through a Node.js companion on your computer, connected over USB. The companion signs in with OpenAI's open-source [Sign in with ChatGPT DevKit](https://developers.openai.com/siwc/token-sharing-open-source) and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on your ChatGPT plan. It uses the first model in the account's eligible catalog. The phone receives model replies and runs the tools itself. OAuth credentials live only in the companion's memory, so you sign in again after restarting it.
 
-OpenAI documents the open-source flow with a loopback callback and provides a local Node.js DevKit. The POC uses that companion flow for the Android button. Codex App Server also documents its own managed ChatGPT login and an experimental dynamic-tool interface for host-side integrations. [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) · [Codex App Server](https://developers.openai.com/codex/app-server)
-
-Build the DevKit in a separate checkout. It is distributed under its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE).
+Build the DevKit in a separate checkout. It has its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE).
 
 ```sh
 git clone https://github.com/openai/sign-in-with-chatgpt-devkit.git
@@ -45,18 +43,20 @@ npm ci --ignore-scripts
 npm run build -w @siwc/local
 ```
 
-From the Android Agent checkout, start the companion and forward its loopback port to the device.
+From the Android Agent checkout, start the companion and forward its port to the device.
 
 ```sh
 node companion/server.mjs /path/to/sign-in-with-chatgpt-devkit
 adb reverse tcp:8765 tcp:8765
 ```
 
-1. In **Ask Android Agent**, enter the pairing code printed by the companion, then tap **Sign in with ChatGPT**. After consent in the computer's browser, tap **Check connection**.
-2. Try `Set a timer for 2 minutes and 17 seconds`. Check the countdown in Clock. The app can confirm that it sent the intent to Clock.
-3. To use Maps, first enable **Android Agent window verification** in **Accessibility settings**. Return to Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview`, and opt in to screen sharing for that prompt. Keep Maps in the foreground while the agent works, then return to Android Agent to read its reply. The foreground UI session expires after one minute.
+1. In **Ask Android Agent**, enter the pairing code the companion printed and tap **Sign in with ChatGPT**. Approve plan usage in the computer's browser, then tap **Check connection**.
+2. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
+3. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
 
-The model can run an ordered sequence of tools and use the results to decide what to do next. The POC supports one timer request and one foreground UI session per prompt. UI actions resolve a uniquely matching control on the current screen. Prompts go to the model. Screen-sharing consent lets the agent choose one installed app, share its visible labels and controls with ChatGPT, and click or enter text without another confirmation. Visible labels can contain personal information. The agent attempts at most one timer dispatch per prompt because an error can leave dispatch uncertain. Clock works with screen sharing off. The companion uses the first model in the account's eligible catalog.
+Each model reply is an ordered list of tool calls, and the results go back to the model for the next step. A prompt gets at most one timer dispatch, because a failed call can leave the dispatch outcome unknown, and one foreground UI session. Clock works without screen sharing.
+
+Screen sharing is off by default and resets for every prompt. Turning it on lets the agent open one installed app, send its visible labels and controls to ChatGPT, and click or type into a control that matches uniquely on the current screen, without asking again. Visible labels can contain personal information. Only the latest screen observation stays in the model context.
 
 ## Checks
 
