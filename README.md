@@ -50,6 +50,8 @@ node companion/server.mjs /path/to/sign-in-with-chatgpt-devkit
 adb reverse tcp:8765 tcp:8765
 ```
 
+Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page as soon as the companion starts.
+
 1. In **Ask Android Agent**, enter the pairing code the companion printed and tap **Sign in with ChatGPT**. Approve plan usage in the computer's browser, then tap **Check connection**.
 2. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
 3. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
