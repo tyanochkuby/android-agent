@@ -21,11 +21,30 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     error("No task journal migration from $oldVersion to $newVersion.")
   }
 
+  override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+    // The earlier chat build used version 2 with the same task table.
+    check(oldVersion == 2 && newVersion == 1) {
+      "No task journal downgrade from $oldVersion to $newVersion."
+    }
+  }
+
   override suspend fun read(id: String?): Task? = withContext(Dispatchers.IO) {
     val query = if (id == null) "SELECT snapshot FROM tasks ORDER BY sequence DESC LIMIT 1"
     else "SELECT snapshot FROM tasks WHERE id = ?"
     readableDatabase.rawQuery(query, id?.let { arrayOf(it) }).use { cursor ->
       if (cursor.moveToFirst()) taskJson.decodeFromString<Task>(cursor.getString(0)) else null
+    }
+  }
+
+  override suspend fun list(before: String?, limit: Int): List<Task> = withContext(Dispatchers.IO) {
+    val older = if (before == null) "" else "WHERE sequence < (SELECT sequence FROM tasks WHERE id = ?) "
+    readableDatabase.rawQuery(
+      "SELECT snapshot FROM tasks ${older}ORDER BY sequence DESC LIMIT ?",
+      listOfNotNull(before, limit.toString()).toTypedArray(),
+    ).use { cursor ->
+      buildList {
+        while (cursor.moveToNext()) add(taskJson.decodeFromString<Task>(cursor.getString(0)))
+      }
     }
   }
 
