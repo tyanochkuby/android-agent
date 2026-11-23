@@ -1,4 +1,4 @@
 <resources>
     <string name="window_observer_label">Android Agent window verification</string>
-    <string name="window_observer_description">Checks whether a supported app is the active window. Android Agent only records whether the package matched and when it checked.</string>
+    <string name="window_observer_description">Observes and operates the selected app during an explicit UI workflow.</string>
 </resources>

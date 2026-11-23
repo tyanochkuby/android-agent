@@ -226,7 +226,7 @@ export default function App() {
                   <Text style={styles.buttonText}>Continue task</Text>
                 </Pressable>
               )}
-              {busy && !task.cancelled && (
+              {(running || paused) && !task.cancelled && (
                 <Pressable
                   accessibilityRole="button"
                   disabled={pending}

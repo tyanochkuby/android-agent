@@ -35,6 +35,14 @@ Repository-authored TypeScript can use regular control flow around `tasks.submit
 
 The timer and app launches require a resumed Android Agent Activity and an unlocked, interactive screen. For future deferrable work, consider WorkManager. A user-visible foreground service or assistant entry point has separate Android requirements. [Background activity launches](https://developer.android.com/guide/components/activities/secure-bal) · [VoiceInteractionService](https://developer.android.com/reference/android/service/voice/VoiceInteractionService)
 
+## Foreground UI workflows
+
+The sideloaded debug build can start a TypeScript workflow against a selected Android package. The same Kotlin adapter opens the app, reads a bounded Accessibility snapshot, and requests click or text-entry actions supported by the selected element. On Android 13 and later the launch uses a package-scoped intent sender. On older versions the target must already be visible to the app. The Maps demo's selectors live in TypeScript.
+
+Each action consumes its snapshot. Before dispatch, Kotlin checks the active package, window, target, and matched label. A stale result means the action was never issued, so the caller can re-observe and retry its selection. An accepted action is a dispatch receipt. The workflow checks the next screen for evidence of the result.
+
+A session is started from Android Agent while it owns the foreground and lasts at most one minute. The expected target-app handoff lets the script continue. A detected switch away from the app, a reported touch interaction, or an unavailable screen ends the session or blocks dispatch. Touch reporting depends on Android and the active accessibility configuration. Return to Android Agent to start again. Only explicitly started workflows receive snapshots. Snapshot data stays in memory, with no provider transmission. The step journal still covers task batches. UI workflow sessions end on process death and scripts do not replay automatically.
+
 ## Isolated display feasibility
 
 A normal app can create a private, own-content virtual display. Starting an activity on it also requires that Android allow the activity on that display. `ActivityOptions.setLaunchDisplayId` is available from API 26 and requires the device’s secondary-activity display feature. On API 29 and newer, use `ActivityManager.isActivityStartAllowedOnDisplay` with the actual target intent and display. Android restricts cross-app launches on untrusted virtual displays, so a display owned by the app is insufficient for general third-party UI automation. [ActivityOptions](https://developer.android.com/reference/android/app/ActivityOptions#setLaunchDisplayId(int)) · [AOSP activity launch policy](https://source.android.com/docs/core/display/multi_display/activity-launch)

@@ -1,0 +1,10 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'io.github.tyanochkuby.uifixture'
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdk 24
+        targetSdk 32
+    }
+}

@@ -1,9 +1,12 @@
 package io.github.tyanochkuby.androidagent
 
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import io.github.tyanochkuby.androidagent.tasks.UiSession
+import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import io.github.tyanochkuby.androidagent.tasks.TaskRequest
 import io.github.tyanochkuby.androidagent.tasks.taskJson
 import kotlinx.coroutines.CancellationException
@@ -11,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
@@ -20,6 +24,7 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   override fun getName() = NAME
 
   override fun submit(request: String, promise: Promise) = respond(promise) {
+    check(uiSession == null) { "Close the UI workflow before submitting another task." }
     require(request.length <= 65_536) { "Task request is too large." }
     val parsed = taskJson.decodeFromString<TaskRequest>(request)
     parsed.validate()
@@ -31,6 +36,7 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   }
 
   override fun resume(id: String, promise: Promise) = respond(promise) {
+    check(uiSession == null) { "Close the UI workflow before resuming another task." }
     taskJson.encodeToString(executor.resume(id))
   }
 
@@ -44,7 +50,62 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
     null
   }
 
+  private var uiSession: UiSession? = null
+
+  override fun startUi(app: String, promise: Promise) = respond(promise) {
+    check(uiSession == null) { "Close the current UI session first." }
+    val observer = checkNotNull(WindowObserver.connected) { "Enable Android Agent in Accessibility settings." }
+    val foreground = checkNotNull(MainActivity.foregroundSession) { "Open Android Agent first." }
+    require(app.matches(PACKAGE_NAME) && app != foreground.activity.packageName) { "Choose a valid external app." }
+    val session = UiSession(observer, app)
+    uiSession = session
+    try {
+      check(executor.read(null)?.finished != false) { "Finish the current task first." }
+      check(MainActivity.foregroundSession === foreground && WindowObserver.connected === observer && uiSession === session) {
+        "Return to Android Agent and start the workflow again."
+      }
+      val activity = foreground.activity
+      if (Build.VERSION.SDK_INT >= 33) {
+        activity.startIntentSender(activity.packageManager.getLaunchIntentSenderForPackage(app), null, 0, 0, 0)
+      } else {
+        val launch = checkNotNull(activity.packageManager.getLaunchIntentForPackage(app)) { "Install the target app first." }
+        activity.startActivity(launch)
+      }
+      observer.session = session
+      null
+    } catch (error: Exception) {
+      if (uiSession === session) closeUi()
+      throw error
+    }
+  }
+
+  override fun observeUi(promise: Promise) = respond(promise) {
+    val session = checkNotNull(uiSession)
+    // React Native timers can pause when the target app opens.
+    delay(250)
+    session.observe()?.let { taskJson.encodeToString(it) }
+  }
+
+  override fun actUi(snapshot: String, element: Double, witness: Double, text: String?, promise: Promise) = respond(promise) {
+    require(element in 0.0..399.0 && element % 1 == 0.0)
+    require(witness in 0.0..399.0 && witness % 1 == 0.0)
+    checkNotNull(uiSession).act(snapshot, element.toInt(), witness.toInt(), text)
+  }
+
+  override fun stopUi(promise: Promise) = respond(promise) {
+    closeUi()
+    null
+  }
+
+  private fun closeUi() {
+    uiSession?.stop()
+    val observer = WindowObserver.connected
+    if (observer?.session === uiSession) observer?.session = null
+    uiSession = null
+  }
+
   override fun invalidate() {
+    closeUi()
     scope.cancel()
     super.invalidate()
   }
@@ -62,6 +123,7 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   }
 
   companion object {
+    private val PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
     const val NAME = "NativeTasks"
   }
 }
