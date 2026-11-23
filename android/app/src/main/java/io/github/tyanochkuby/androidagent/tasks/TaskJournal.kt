@@ -17,6 +17,10 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     )
   }
 
+  override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+    error("No task journal migration from $oldVersion to $newVersion.")
+  }
+
   override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
     // The earlier chat build used version 2 with the same task table.
     check(oldVersion == 2 && newVersion == 1) {
