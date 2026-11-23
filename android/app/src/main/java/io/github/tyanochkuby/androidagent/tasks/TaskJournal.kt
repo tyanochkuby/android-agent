@@ -10,17 +10,17 @@ import kotlinx.serialization.json.Json
 
 internal val taskJson = Json { encodeDefaults = true }
 
-internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.db", null, 2), TaskStore {
+internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.db", null, 1), TaskStore {
   override fun onCreate(db: SQLiteDatabase) {
     db.execSQL(
       "CREATE TABLE tasks (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, snapshot TEXT NOT NULL)",
     )
   }
 
-  override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-    // Both versions have the same task table. Version 2 was used by an earlier chat build.
-    check(oldVersion == 1 && newVersion == 2) {
-      "No task journal migration from $oldVersion to $newVersion."
+  override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+    // The earlier chat build used version 2 with the same task table.
+    check(oldVersion == 2 && newVersion == 1) {
+      "No task journal downgrade from $oldVersion to $newVersion."
     }
   }
 
