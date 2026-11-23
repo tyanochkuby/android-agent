@@ -91,6 +91,20 @@ function parseDecision(value: unknown): Decision {
   throw new Error('Invalid model decision.');
 }
 
+// Returns the model's tool calls, or undefined when the reply breaks the protocol.
+function parseDecisions(raw: string): Decision[] | undefined {
+  try {
+    const calls: unknown = JSON.parse(raw);
+    if (!Array.isArray(calls) || calls.length < 1 || calls.length > 8) return;
+    const decisions = calls.map(parseDecision);
+    if (decisions.length > 1 && decisions.some(call => call.tool === 'finish'))
+      return;
+    return decisions;
+  } catch {
+    return;
+  }
+}
+
 export type AgentTools = {
   startTimer: (seconds: number) => Promise<unknown>;
   openApp: (packageName: string) => Promise<void>;
@@ -183,20 +197,8 @@ export async function runAgent(
         instructions,
         input.map(message => ({ ...message })),
       );
-      let decisions;
-      try {
-        const calls: unknown = JSON.parse(raw);
-        if (!Array.isArray(calls) || calls.length < 1 || calls.length > 8) {
-          throw new Error('Return between one and eight tool calls.');
-        }
-        decisions = calls.map(parseDecision);
-        if (
-          decisions.length > 1 &&
-          decisions.some(call => call.tool === 'finish')
-        ) {
-          throw new Error('Finish must be the only call in a response.');
-        }
-      } catch {
+      const decisions = parseDecisions(raw);
+      if (!decisions) {
         input.push(
           { role: 'assistant', content: raw.slice(0, 2_000) },
           {
