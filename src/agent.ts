@@ -118,6 +118,7 @@ export async function runAgent(
   const input: Message[] = [{ role: 'user', content: prompt }];
   let uiOpen = false;
   let timerRequested = false;
+  let previousObservation: { message: Message; summary: string } | undefined;
 
   async function execute(decision: Exclude<Decision, { tool: 'finish' }>) {
     switch (decision.tool) {
@@ -125,6 +126,7 @@ export async function runAgent(
         if (uiOpen) throw new Error('A UI session is already open.');
         if (timerRequested)
           throw new Error('The timer tool was already invoked.');
+        // A failed response can leave the native dispatch outcome uncertain.
         timerRequested = true;
         return tools.startTimer(decision.seconds);
       case 'open_app':
@@ -177,7 +179,10 @@ export async function runAgent(
 
   try {
     for (let turn = 0; turn < 18; turn++) {
-      const raw = await model(instructions, input);
+      const raw = await model(
+        instructions,
+        input.map(message => ({ ...message })),
+      );
       let decisions;
       try {
         const calls: unknown = JSON.parse(raw);
@@ -202,14 +207,25 @@ export async function runAgent(
         );
         continue;
       }
-      const results = [];
+      const results: {
+        tool: Decision['tool'];
+        result?: unknown;
+        error?: string;
+      }[] = [];
+      let observation: (typeof results)[number] | undefined;
       for (const decision of decisions) {
         if (decision.tool === 'finish') return decision.message;
         try {
-          results.push({
+          const result = {
             tool: decision.tool,
             result: await execute(decision),
-          });
+          };
+          if (decision.tool === 'observe_ui') {
+            if (observation)
+              observation.result = 'Earlier observation omitted.';
+            observation = result;
+          }
+          results.push(result);
         } catch (error) {
           results.push({
             tool: decision.tool,
@@ -218,15 +234,35 @@ export async function runAgent(
           break;
         }
       }
+      const message: Message = {
+        role: 'user',
+        content: JSON.stringify({ toolResults: results }),
+      };
+      if (observation) {
+        if (previousObservation) {
+          previousObservation.message.content = previousObservation.summary;
+        }
+        observation.result = 'Earlier observation omitted.';
+        previousObservation = {
+          message,
+          summary: JSON.stringify({ toolResults: results }),
+        };
+      }
       input.push(
         { role: 'assistant', content: JSON.stringify(decisions) },
-        { role: 'user', content: JSON.stringify({ toolResults: results }) },
+        message,
       );
     }
     throw new Error(
       'The agent reached its tool limit. Check the device for any actions already taken.',
     );
   } finally {
-    if (uiOpen) await tools.closeUi();
+    if (uiOpen) {
+      try {
+        await tools.closeUi();
+      } catch {
+        console.warn('Could not close the Android UI session.');
+      }
+    }
   }
 }

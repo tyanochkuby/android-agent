@@ -38,8 +38,14 @@ const chatgpt = createChatGPT({
       return Buffer.from(handle);
     },
     decrypt(ciphertext) {
-      const plaintext = credentials.get(Buffer.from(ciphertext).toString());
+      const current = Buffer.from(ciphertext).toString();
+      const plaintext = credentials.get(current);
       if (plaintext === undefined) throw new Error('Restart ChatGPT sign-in.');
+      // The SDK reads the committed handle under its storage lock.
+      // Older handles can be discarded once that read succeeds.
+      for (const handle of credentials.keys()) {
+        if (handle !== current) credentials.delete(handle);
+      }
       return plaintext;
     },
   },
@@ -119,7 +125,10 @@ const server = createServer(async (request, response) => {
   }
 
   const controller = new AbortController();
-  response.once('close', () => controller.abort());
+  response.once('close', () => {
+    if (!response.writableFinished) controller.abort();
+  });
+  let inferenceDeadline;
   try {
     switch (`${request.method} ${request.url}`) {
       case 'GET /status':
@@ -130,11 +139,12 @@ const server = createServer(async (request, response) => {
         reply(202, { ready: false, signingIn: true });
         break;
       case 'POST /infer':
+        inferenceDeadline = AbortSignal.timeout(45_000);
         reply(
           200,
           await infer(
             request,
-            AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]),
+            AbortSignal.any([controller.signal, inferenceDeadline]),
           ),
         );
         break;
@@ -142,7 +152,12 @@ const server = createServer(async (request, response) => {
         reply(404, { error: 'Unknown companion request.' });
     }
   } catch (error) {
-    if (!response.destroyed) reply(400, { error: error.message });
+    if (response.destroyed) return;
+    if (inferenceDeadline?.aborted) {
+      reply(504, { error: 'ChatGPT did not finish within 45 seconds.' });
+      return;
+    }
+    reply(400, { error: error.message });
   }
 });
 

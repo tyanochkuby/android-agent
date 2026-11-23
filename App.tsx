@@ -231,8 +231,9 @@ export default function App() {
                     style={[styles.preset, shareScreen && styles.selected]}
                   >
                     <Text style={styles.presetText}>
-                      {shareScreen ? '☑' : '☐'} Share the selected app’s visible
-                      text and controls with ChatGPT for this prompt
+                      {shareScreen ? '☑' : '☐'} Allow the agent to open an
+                      installed app and share its visible text and controls with
+                      ChatGPT for this prompt
                     </Text>
                   </Pressable>
                   <Pressable
