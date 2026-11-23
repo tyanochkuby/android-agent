@@ -41,9 +41,12 @@ test('reports the native timer result and prevents repeating dispatch', async ()
     { tool: 'finish', message: 'Sent a 90-second timer request to Clock.' },
   );
 
-  await expect(runAgent('Set a 90-second timer', model, tools)).resolves.toBe(
-    'Sent a 90-second timer request to Clock.',
-  );
+  await expect(
+    runAgent('Set a 90-second timer', model, tools),
+  ).resolves.toEqual({
+    message: 'Sent a 90-second timer request to Clock.',
+    usedScreenObservation: false,
+  });
   expect(tools.startTimer).toHaveBeenCalledTimes(1);
   expect(tools.startTimer).toHaveBeenCalledWith(90);
   expect(model.mock.calls[1][1][2].content).toContain('ISSUED');
@@ -80,9 +83,12 @@ test('resolves each action against a fresh snapshot', async () => {
     { tool: 'finish', message: 'Opened Maps search.' },
   );
 
-  await expect(runAgent('Open Maps search', model, tools, true)).resolves.toBe(
-    'Opened Maps search.',
-  );
+  await expect(
+    runAgent('Open Maps search', model, tools, true),
+  ).resolves.toEqual({
+    message: 'Opened Maps search.',
+    usedScreenObservation: true,
+  });
   expect(tools.openApp).toHaveBeenCalledWith('com.google.android.apps.maps');
   expect(tools.actUi.mock.calls).toEqual([
     ['maps-old', 0, 0, null],

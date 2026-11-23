@@ -15,6 +15,8 @@ import type { Task, TaskRequest } from './src/tasks';
 import { runAgent } from './src/agent';
 import { agentTools } from './src/agentTools';
 import { companion } from './src/companion';
+import { conversation, conversationContext } from './src/conversation';
+import type { ConversationTurn } from './src/conversation';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
@@ -29,7 +31,12 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
-  const [answer, setAnswer] = useState('');
+  const [promptStatus, setPromptStatus] = useState('');
+  const [history, setHistory] = useState<ConversationTurn[] | null>(null);
+  const [screenReply, setScreenReply] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
   const revision = useRef(0);
   const submitting = useRef(false);
   const states = Object.values(task?.states ?? {});
@@ -38,6 +45,25 @@ export default function App() {
   );
   const paused = states.some(({ phase }) => phase === 'PAUSED');
   const busy = loading || pending || running || paused;
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    let active = true;
+    conversation.read().then(
+      turns => {
+        if (active) setHistory(turns);
+      },
+      () => {
+        if (active) {
+          setHistory([]);
+          setPromptStatus('Could not load conversation history.');
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -119,7 +145,7 @@ export default function App() {
       const bridge = companion(pairingCode.trim());
       const connection = await (signIn ? bridge.signIn() : bridge.check());
       setConnected(connection.ready);
-      setAnswer(
+      setPromptStatus(
         connection.error ??
           (connection.ready
             ? ''
@@ -132,22 +158,58 @@ export default function App() {
 
   function askAgent() {
     return handle(async () => {
-      setAnswer('Working…');
       setShareScreen(false);
+      setScreenReply(null);
+      setPromptStatus('Working…');
+      const code = pairingCode.trim();
+      const redactCode = (value: string) =>
+        value.replaceAll(code, '[pairing code removed]');
+      const message = redactCode(prompt.trim());
+
+      let id: string;
+      let previous: ConversationTurn[];
       try {
-        setAnswer(
-          await runAgent(
-            prompt.trim(),
-            companion(pairingCode.trim()).model,
-            agentTools,
-            shareScreen,
-          ),
+        previous = await conversation.read();
+        id = await conversation.start(message);
+      } catch {
+        setPromptStatus('Could not save the prompt. Please try again.');
+        return;
+      }
+      const recent = previous.slice(-49);
+      setHistory([...recent, { id, prompt: message, reply: null }]);
+      setPrompt('');
+
+      let result;
+      try {
+        result = await runAgent(
+          message,
+          companion(code).model,
+          agentTools,
+          shareScreen,
+          conversationContext(previous).map(turn => ({
+            ...turn,
+            content: redactCode(turn.content),
+          })),
         );
       } catch (error) {
         setConnected(false);
-        setAnswer(
+        setPromptStatus(
           error instanceof Error ? error.message : 'The agent stopped.',
         );
+        return (await tasks.read()) ?? undefined;
+      }
+
+      const reply = redactCode(result.message);
+      setPromptStatus('');
+      if (result.usedScreenObservation) {
+        setScreenReply({ id, message: reply });
+      } else {
+        try {
+          await conversation.saveReply(id, reply);
+          setHistory([...recent, { id, prompt: message, reply }]);
+        } catch {
+          setPromptStatus('Could not save the reply.');
+        }
       }
       return (await tasks.read()) ?? undefined;
     });
@@ -181,14 +243,17 @@ export default function App() {
                 onChangeText={value => {
                   setPairingCode(value);
                   setConnected(false);
-                  setAnswer('');
+                  setShareScreen(false);
+                  setPromptStatus('');
                 }}
               />
               {!connected && (
                 <>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={busy || pairingCode.length !== 32}
+                    disabled={
+                      busy || history === null || pairingCode.length !== 32
+                    }
                     onPress={() => connect(true)}
                     style={styles.button}
                   >
@@ -196,7 +261,9 @@ export default function App() {
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={busy || pairingCode.length !== 32}
+                    disabled={
+                      busy || history === null || pairingCode.length !== 32
+                    }
                     onPress={() => connect(false)}
                     style={styles.preset}
                   >
@@ -207,6 +274,10 @@ export default function App() {
               {connected && (
                 <>
                   <Text style={styles.presetText}>Using ChatGPT plan</Text>
+                  <Text style={styles.description}>
+                    Prompts are saved on this device. Keep passwords and keys
+                    out of the conversation.
+                  </Text>
                   <TextInput
                     accessibilityLabel="Agent prompt"
                     placeholder="What should Android do?"
@@ -246,13 +317,41 @@ export default function App() {
                   </Pressable>
                 </>
               )}
-              {!!answer && (
+              {!!promptStatus && (
                 <Text
                   accessibilityLiveRegion="polite"
                   style={styles.description}
                 >
-                  {answer}
+                  {promptStatus}
                 </Text>
+              )}
+              {!!history?.length && (
+                <View style={styles.history}>
+                  <Text accessibilityRole="header" style={styles.presetText}>
+                    Conversation history
+                  </Text>
+                  {history
+                    .slice()
+                    .reverse()
+                    .map(turn => (
+                      <View key={turn.id} style={styles.turn}>
+                        <Text style={styles.presetText}>You</Text>
+                        <Text selectable style={styles.description}>
+                          {turn.prompt}
+                        </Text>
+                        <Text style={styles.presetText}>Android Agent</Text>
+                        <Text
+                          selectable
+                          accessibilityLiveRegion="polite"
+                          style={styles.description}
+                        >
+                          {screenReply?.id === turn.id
+                            ? screenReply.message
+                            : turn.reply ?? 'No saved reply'}
+                        </Text>
+                      </View>
+                    ))}
+                </View>
               )}
             </View>
           )}
@@ -439,6 +538,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     minHeight: 48,
   },
+  history: { gap: 12 },
+  turn: { borderTopWidth: 1, borderColor: '#3B4133', paddingTop: 12, gap: 4 },
   selected: { backgroundColor: '#3A472D', borderColor: '#C9F37B' },
   presetText: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },
   button: {

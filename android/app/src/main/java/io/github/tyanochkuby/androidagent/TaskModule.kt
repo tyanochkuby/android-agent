@@ -21,7 +21,8 @@ import kotlinx.coroutines.launch
 
 class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-  private val executor = (context.applicationContext as MainApplication).taskExecutor
+  private val application = context.applicationContext as MainApplication
+  private val executor = application.taskExecutor
 
   override fun getName() = NAME
 
@@ -35,6 +36,19 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
 
   override fun read(id: String?, promise: Promise) = respond(promise) {
     executor.read(id)?.let { taskJson.encodeToString(it) }
+  }
+
+  override fun readConversation(promise: Promise) = respond(promise) {
+    taskJson.encodeToString(application.taskJournal.readConversation())
+  }
+
+  override fun startTurn(prompt: String, promise: Promise) = respond(promise) {
+    application.taskJournal.startTurn(prompt)
+  }
+
+  override fun saveReply(id: String, reply: String, promise: Promise) = respond(promise) {
+    application.taskJournal.saveReply(id, reply)
+    null
   }
 
   override fun waitForTask(id: String, promise: Promise) = respond(promise) {

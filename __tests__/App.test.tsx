@@ -16,6 +16,9 @@ jest.mock('../src/native/NativeTasks', () => ({
   default: {
     submit: jest.fn(),
     read: jest.fn(),
+    readConversation: jest.fn(),
+    startTurn: jest.fn(),
+    saveReply: jest.fn(),
     resume: jest.fn(),
     cancel: jest.fn(),
     openAccessibilitySettings: jest.fn(),
@@ -25,12 +28,18 @@ jest.mock('../src/native/NativeTasks', () => ({
 const submit = jest.mocked(NativeTasks.submit);
 const read = jest.mocked(NativeTasks.read);
 const resume = jest.mocked(NativeTasks.resume);
+const readConversation = jest.mocked(NativeTasks.readConversation);
+const startTurn = jest.mocked(NativeTasks.startTurn);
+const saveReply = jest.mocked(NativeTasks.saveReply);
 
 beforeEach(() => {
   submit.mockReset();
   read.mockReset();
   resume.mockReset();
   read.mockResolvedValue(null);
+  readConversation.mockReset().mockResolvedValue('[]');
+  startTurn.mockReset();
+  saveReply.mockReset();
 });
 
 test('reports a selected timer as issued', async () => {
@@ -171,23 +180,37 @@ test('shows recovered window evidence alongside an unknown launch outcome', asyn
   ).toBeTruthy();
 });
 
-test('starts companion sign-in and runs a prompt once plan usage is enabled', async () => {
+test('restores a saved exchange and uses it for a follow-up with fresh consent', async () => {
   const bridge = jest.spyOn(require('../src/companion'), 'companion');
   const signIn = jest.fn().mockResolvedValue({ signingIn: true });
   const check = jest.fn().mockResolvedValue({ ready: true });
   const model = jest
     .fn()
-    .mockResolvedValue(
+    .mockResolvedValueOnce(
       '[{"tool":"finish","message":"Ready for Android tasks."}]',
+    )
+    .mockResolvedValueOnce(
+      '[{"tool":"finish","message":"I can set a timer."}]',
     );
+  const code = 'a'.repeat(32);
+  const turns: { id: string; prompt: string; reply: string | null }[] = [];
+  readConversation.mockImplementation(async () => JSON.stringify(turns));
+  startTurn.mockImplementation(async prompt => {
+    const id = String(turns.length + 1);
+    turns.push({ id, prompt, reply: null });
+    return id;
+  });
+  saveReply.mockImplementation(async (id, reply) => {
+    turns.find(turn => turn.id === id)!.reply = reply;
+  });
   bridge.mockReturnValue({ signIn, check, model } satisfies ReturnType<
     typeof companion
   >);
   try {
-    await render(<App />);
+    const first = await render(<App />);
     await fireEvent.changeText(
       screen.getByLabelText('Companion pairing code'),
-      'a'.repeat(32),
+      code,
     );
     await fireEvent.press(
       screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
@@ -200,7 +223,7 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
     );
     await fireEvent.changeText(
       screen.getByLabelText('Agent prompt'),
-      'What can you do?',
+      `What can you do? ${code}`,
     );
     expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
       false,
@@ -213,9 +236,37 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
     expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
     expect(signIn).toHaveBeenCalledTimes(1);
     expect(check).toHaveBeenCalledTimes(1);
-    expect(model).toHaveBeenCalledWith(expect.any(String), [
-      { role: 'user', content: 'What can you do?' },
-    ]);
+    expect(startTurn).toHaveBeenCalledWith(
+      'What can you do? [pairing code removed]',
+    );
+    expect(saveReply).toHaveBeenCalledWith('1', 'Ready for Android tasks.');
+
+    await first.unmount();
+    await render(<App />);
+    expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
+    expect(screen.getByLabelText('Companion pairing code').props.value).toBe(
+      '',
+    );
+    await fireEvent.changeText(
+      screen.getByLabelText('Companion pairing code'),
+      code,
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Check connection' }),
+    );
+    await fireEvent.changeText(
+      screen.getByLabelText('Agent prompt'),
+      'Give me an example.',
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
+    expect(model).toHaveBeenLastCalledWith(
+      expect.stringContaining('Screen sharing is off'),
+      [
+        { role: 'user', content: 'What can you do? [pairing code removed]' },
+        { role: 'assistant', content: 'Ready for Android tasks.' },
+        { role: 'user', content: 'Give me an example.' },
+      ],
+    );
   } finally {
     bridge.mockRestore();
   }

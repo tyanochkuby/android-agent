@@ -1,7 +1,7 @@
 import { select } from './uiSelection';
 import type { Snapshot } from './uiSelection';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+export type Message = { role: 'user' | 'assistant'; content: string };
 export type Model = (instructions: string, input: Message[]) => Promise<string>;
 
 type Selector = { label?: string; description?: string; resourceId?: string };
@@ -123,13 +123,15 @@ export async function runAgent(
   model: Model,
   tools: AgentTools,
   shareScreen = false,
-): Promise<string> {
+  history: Message[] = [],
+) {
   const instructions = [
     instructionsForAgent,
+    'Use earlier conversation turns as context. Perform actions only for the current user request.',
     protocol,
     shareScreen ? screenTools : 'Screen sharing is off for this request.',
   ].join('\n\n');
-  const input: Message[] = [{ role: 'user', content: prompt }];
+  const input: Message[] = [...history, { role: 'user', content: prompt }];
   let uiOpen = false;
   let timerRequested = false;
   let previousObservation: { message: Message; summary: string } | undefined;
@@ -216,7 +218,12 @@ export async function runAgent(
       }[] = [];
       let observation: (typeof results)[number] | undefined;
       for (const decision of decisions) {
-        if (decision.tool === 'finish') return decision.message;
+        if (decision.tool === 'finish') {
+          return {
+            message: decision.message,
+            usedScreenObservation: previousObservation !== undefined,
+          };
+        }
         try {
           const result = {
             tool: decision.tool,

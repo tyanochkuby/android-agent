@@ -15,8 +15,10 @@ import kotlinx.coroutines.SupervisorJob
 
 class MainApplication : Application(), ReactApplication {
 
+  internal val taskJournal by lazy { TaskJournal(this) }
+
   internal val taskExecutor by lazy {
-    TaskExecutor(TaskJournal(this), AndroidActions(this), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+    TaskExecutor(taskJournal, AndroidActions(this), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
   }
 
   override val reactHost: ReactHost by lazy {

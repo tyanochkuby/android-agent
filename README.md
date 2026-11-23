@@ -58,6 +58,8 @@ Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page as soon a
 
 Each model reply is an ordered list of tool calls, and the results go back to the model for the next step. A prompt gets at most one timer dispatch, because a failed call can leave the dispatch outcome unknown, and one foreground UI session. Clock works without screen sharing.
 
+**Conversation history** shows the last 50 prompts and their saved replies, including after an app restart. Follow-up prompts send up to six recent prompt and reply pairs to ChatGPT as context. A reply based on a screen observation stays visible until the next prompt or app restart. Keep passwords and keys out of prompts.
+
 Screen sharing is off by default and resets for every prompt. Turning it on lets the agent open one installed app, send its visible labels and controls to ChatGPT, and click or type into a control that matches uniquely on the current screen, without asking again. Visible labels can contain personal information. Only the latest screen observation stays in the model context.
 
 ## Checks
