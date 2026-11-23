@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import NativeTasks from '../src/native/NativeTasks';
 import type { TaskRequest } from '../src/tasks';
+import { companion } from '../src/companion';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -171,17 +172,17 @@ test('shows recovered window evidence alongside an unknown launch outcome', asyn
 });
 
 test('starts companion sign-in and runs a prompt once plan usage is enabled', async () => {
-  const calls = jest.spyOn(globalThis, 'fetch');
-  calls
-    .mockResolvedValueOnce(new Response(JSON.stringify({ signingIn: true })))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ ready: true })))
-    .mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          text: '{"tool":"finish","message":"Ready for Android tasks."}',
-        }),
-      ),
+  const bridge = jest.spyOn(require('../src/companion'), 'companion');
+  const signIn = jest.fn().mockResolvedValue({ signingIn: true });
+  const check = jest.fn().mockResolvedValue({ ready: true });
+  const model = jest
+    .fn()
+    .mockResolvedValue(
+      '{"tool":"finish","message":"Ready for Android tasks."}',
     );
+  bridge.mockReturnValue({ signIn, check, model } satisfies ReturnType<
+    typeof companion
+  >);
   try {
     await render(<App />);
     await fireEvent.changeText(
@@ -210,12 +211,12 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
       false,
     );
     expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
-    expect(calls.mock.calls.map(([url]) => url)).toEqual([
-      'http://127.0.0.1:8765/sign-in',
-      'http://127.0.0.1:8765/status',
-      'http://127.0.0.1:8765/infer',
+    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(model).toHaveBeenCalledWith(expect.any(String), [
+      { role: 'user', content: 'What can you do?' },
     ]);
   } finally {
-    calls.mockRestore();
+    bridge.mockRestore();
   }
 });

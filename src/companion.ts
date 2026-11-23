@@ -4,23 +4,26 @@ type Connection = { ready: boolean; signingIn: boolean; error?: string };
 
 export function companion(pairingCode: string) {
   async function request<T>(path: string, method: string, body?: object) {
-    let response;
-    try {
-      response = await fetch(`http://127.0.0.1:8765${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${pairingCode}`,
-          'Content-Type': 'application/json',
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch {
-      throw new Error('Start the companion and connect it with adb reverse.');
-    }
+    // React Native fetch uses JS timers to deliver replies. Direct XHR
+    // callbacks continue while the target app owns the foreground.
+    const response = await new Promise<XMLHttpRequest>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, `http://127.0.0.1:8765${path}`);
+      xhr.timeout = 60_000;
+      xhr.setRequestHeader('Authorization', `Bearer ${pairingCode}`);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = () => resolve(xhr);
+      xhr.onerror = () =>
+        reject(
+          new Error('Start the companion and connect it with adb reverse.'),
+        );
+      xhr.ontimeout = () => reject(new Error('The companion did not reply.'));
+      xhr.send(body === undefined ? null : JSON.stringify(body));
+    });
     if (response.status === 403)
       throw new Error('Check the companion pairing code.');
-    const result = await response.json();
-    if (!response.ok)
+    const result = JSON.parse(response.responseText);
+    if (response.status < 200 || response.status >= 300)
       throw new Error(result.error ?? 'The companion request failed.');
     return result as T;
   }
