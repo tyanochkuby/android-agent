@@ -2,9 +2,11 @@ package io.github.tyanochkuby.androidagent
 
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import io.github.tyanochkuby.androidagent.tasks.Phase
 import io.github.tyanochkuby.androidagent.tasks.UiSession
 import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import io.github.tyanochkuby.androidagent.tasks.TaskRequest
@@ -33,6 +35,18 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
 
   override fun read(id: String?, promise: Promise) = respond(promise) {
     executor.read(id)?.let { taskJson.encodeToString(it) }
+  }
+
+  override fun waitForTask(id: String, promise: Promise) = respond(promise) {
+    val deadline = SystemClock.elapsedRealtime() + 5_000
+    var task = checkNotNull(executor.read(id)) { "Task status is unavailable." }
+    while (!task.finished && task.states.values.none { it.phase == Phase.PAUSED } &&
+      SystemClock.elapsedRealtime() < deadline
+    ) {
+      delay(100)
+      task = checkNotNull(executor.read(id)) { "Task status is unavailable." }
+    }
+    taskJson.encodeToString(task)
   }
 
   override fun resume(id: String, promise: Promise) = respond(promise) {

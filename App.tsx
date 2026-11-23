@@ -6,11 +6,15 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { appLabels, mapsSteps, tasks } from './src/tasks';
 import type { Task, TaskRequest } from './src/tasks';
+import { runAgent } from './src/agent';
+import { agentTools } from './src/agentTools';
+import { companion } from './src/companion';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
@@ -21,6 +25,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
+  const [pairingCode, setPairingCode] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [shareScreen, setShareScreen] = useState(false);
+  const [answer, setAnswer] = useState('');
   const revision = useRef(0);
   const submitting = useRef(false);
   const states = Object.values(task?.states ?? {});
@@ -104,12 +113,148 @@ export default function App() {
     );
   }
 
+  function connect(signIn: boolean) {
+    return handle(async () => {
+      setConnected(false);
+      const bridge = companion(pairingCode.trim());
+      const connection = await (signIn ? bridge.signIn() : bridge.check());
+      setConnected(connection.ready);
+      setAnswer(
+        connection.error ??
+          (connection.ready
+            ? ''
+            : connection.signingIn
+            ? 'Finish sign-in on the companion computer, then check the connection.'
+            : 'Sign in with ChatGPT on the companion computer.'),
+      );
+    });
+  }
+
+  function askAgent() {
+    return handle(async () => {
+      setAnswer('Working…');
+      setShareScreen(false);
+      try {
+        setAnswer(
+          await runAgent(
+            prompt.trim(),
+            companion(pairingCode.trim()).model,
+            agentTools,
+            shareScreen,
+          ),
+        );
+      } catch (error) {
+        setConnected(false);
+        setAnswer(
+          error instanceof Error ? error.message : 'The agent stopped.',
+        );
+      }
+      return (await tasks.read()) ?? undefined;
+    });
+  }
+
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={styles.screen}>
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.brand}>Android Agent</Text>
+          {__DEV__ && (
+            <View style={styles.panel}>
+              <Text accessibilityRole="header" style={styles.presetText}>
+                Ask Android Agent
+              </Text>
+              <Text style={styles.description}>
+                Connect to the local companion to use your ChatGPT plan.
+              </Text>
+              <TextInput
+                accessibilityLabel="Companion pairing code"
+                placeholder="Companion pairing code"
+                placeholderTextColor="#A4AB9B"
+                style={styles.input}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+                maxLength={32}
+                editable={!busy}
+                value={pairingCode}
+                onChangeText={value => {
+                  setPairingCode(value);
+                  setConnected(false);
+                  setAnswer('');
+                }}
+              />
+              {!connected && (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy || pairingCode.length !== 32}
+                    onPress={() => connect(true)}
+                    style={styles.button}
+                  >
+                    <Text style={styles.buttonText}>Sign in with ChatGPT</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy || pairingCode.length !== 32}
+                    onPress={() => connect(false)}
+                    style={styles.preset}
+                  >
+                    <Text style={styles.presetText}>Check connection</Text>
+                  </Pressable>
+                </>
+              )}
+              {connected && (
+                <>
+                  <Text style={styles.presetText}>Using ChatGPT plan</Text>
+                  <TextInput
+                    accessibilityLabel="Agent prompt"
+                    placeholder="What should Android do?"
+                    placeholderTextColor="#A4AB9B"
+                    style={styles.input}
+                    maxLength={2_000}
+                    editable={!busy}
+                    value={prompt}
+                    onChangeText={value => {
+                      setPrompt(value);
+                      setShareScreen(false);
+                    }}
+                  />
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityState={{
+                      checked: shareScreen,
+                      disabled: busy,
+                    }}
+                    disabled={busy}
+                    onPress={() => setShareScreen(value => !value)}
+                    style={[styles.preset, shareScreen && styles.selected]}
+                  >
+                    <Text style={styles.presetText}>
+                      {shareScreen ? '☑' : '☐'} Share the selected app’s visible
+                      text and controls with ChatGPT for this prompt
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy || !prompt.trim()}
+                    onPress={askAgent}
+                    style={styles.button}
+                  >
+                    <Text style={styles.buttonText}>Run prompt</Text>
+                  </Pressable>
+                </>
+              )}
+              {!!answer && (
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={styles.description}
+                >
+                  {answer}
+                </Text>
+              )}
+            </View>
+          )}
           <Text accessibilityRole="header" style={styles.title}>
             Set a timer
           </Text>
@@ -284,6 +429,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     justifyContent: 'center',
+  },
+  input: {
+    color: '#FBFAF4',
+    borderColor: '#67725E',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    minHeight: 48,
   },
   selected: { backgroundColor: '#3A472D', borderColor: '#C9F37B' },
   presetText: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },

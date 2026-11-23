@@ -1,6 +1,6 @@
 # Android Agent
 
-Android Agent is an Android-first assistant project. The demo runs two local tasks. **Start timer** sends a timer request to Clock. **Find and open Google Maps** looks up an installed app and uses the typed search result to open it. Both show their saved step status when you return to Android Agent. Neither needs an account or model provider.
+Android Agent is an Android-first assistant project. The demo includes two local tasks and a debug-only prompt runner. **Start timer** sends a timer request to Clock. **Find and open Google Maps** looks up an installed app and uses the typed search result to open it. Both show their saved step status when you return to Android Agent. Neither needs an account or model provider.
 
 See [the architecture and Android constraints](docs/architecture.md) for the Kotlin executor contract, recovery behavior, and app verification.
 
@@ -28,6 +28,35 @@ With the Homebrew command-line tools on Apple Silicon, the SDK may instead be at
 Run Metro with `npm start`. With an emulator booted or a USB-debuggable device connected, check `adb devices` and run `npm run android` in a second terminal. Android Studio’s Device Manager can create an API 36 Google APIs emulator that includes Clock.
 
 If the app loads but Fast Refresh disconnects on the emulator, run `adb reverse tcp:8081 tcp:8081`. In React Native’s developer settings, set **Debug server host & port for device** to `127.0.0.1:8081` and reload the app.
+
+## Prompt runner
+
+The debug app pairs over USB with a local Node.js companion. **Sign in with ChatGPT** opens OpenAI's sign-in page in the companion computer's browser. Approve ChatGPT plan usage there. The companion uses OpenAI's open-source DevKit to authorize and stream inference through the public Responses API. The phone gets model replies and runs tools locally. OAuth credentials stay in the companion process and signing in again is required after restarting it. [OpenAI sign-in guide](https://developers.openai.com/siwc/token-sharing-open-source) · [Inference contract](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+
+OpenAI documents the open-source flow with a loopback callback and provides a local Node.js DevKit. The POC uses that companion flow for the Android button. Codex App Server also documents its own managed ChatGPT login and an experimental dynamic-tool interface for host-side integrations. [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) · [Codex App Server](https://developers.openai.com/codex/app-server)
+
+Build the DevKit in a separate checkout. It is distributed under its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE).
+
+```sh
+git clone https://github.com/openai/sign-in-with-chatgpt-devkit.git
+cd sign-in-with-chatgpt-devkit
+git checkout 0a36fefeb913055c8c7a1a29b63d82b96b2e841a
+npm ci --ignore-scripts
+npm run build -w @siwc/local
+```
+
+From the Android Agent checkout, start the companion and forward its loopback port to the device.
+
+```sh
+node companion/server.mjs /path/to/sign-in-with-chatgpt-devkit
+adb reverse tcp:8765 tcp:8765
+```
+
+1. In **Ask Android Agent**, enter the pairing code printed by the companion, then tap **Sign in with ChatGPT**. After consent in the computer's browser, tap **Check connection**.
+2. Try `Set a timer for 2 minutes and 17 seconds`. Check the countdown in Clock. The app can confirm that it sent the intent to Clock.
+3. To use Maps, first enable **Android Agent window verification** in **Accessibility settings**. Return to Android Agent, enter `Show me directions to Warsaw Central Station in Google Maps`, and opt in to screen sharing for that prompt. Keep Maps in the foreground while the agent works, then return to Android Agent to read its reply. The foreground UI session expires after one minute.
+
+The model picks one tool per turn and sees the result before choosing its next action. The POC supports one timer request per prompt and foreground UI sessions in Google Maps or Google Calculator. Prompts go to the model. Visible labels and controls from the selected app are shared only when you opt in for that run. Clock works with screen sharing off. The companion uses the first model in the account's eligible catalog.
 
 ## Checks
 

@@ -169,3 +169,53 @@ test('shows recovered window evidence alongside an unknown launch outcome', asyn
     screen.getByText('open: unknown · Google Maps was active during recovery'),
   ).toBeTruthy();
 });
+
+test('starts companion sign-in and runs a prompt once plan usage is enabled', async () => {
+  const calls = jest.spyOn(globalThis, 'fetch');
+  calls
+    .mockResolvedValueOnce(new Response(JSON.stringify({ signingIn: true })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ready: true })))
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          text: '{"tool":"finish","message":"Ready for Android tasks."}',
+        }),
+      ),
+    );
+  try {
+    await render(<App />);
+    await fireEvent.changeText(
+      screen.getByLabelText('Companion pairing code'),
+      'a'.repeat(32),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    expect(
+      screen.getByText(/Finish sign-in on the companion computer/),
+    ).toBeTruthy();
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Check connection' }),
+    );
+    await fireEvent.changeText(
+      screen.getByLabelText('Agent prompt'),
+      'What can you do?',
+    );
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false,
+    );
+    await fireEvent.press(screen.getByRole('checkbox'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
+    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false,
+    );
+    expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
+    expect(calls.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:8765/sign-in',
+      'http://127.0.0.1:8765/status',
+      'http://127.0.0.1:8765/infer',
+    ]);
+  } finally {
+    calls.mockRestore();
+  }
+});
