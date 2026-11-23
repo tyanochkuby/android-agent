@@ -11,6 +11,9 @@ import kotlinx.coroutines.sync.withLock
 internal interface TaskStore {
   suspend fun read(id: String?): Task?
   suspend fun save(task: Task)
+
+  /** Returns up to [limit] tasks in submission order, newest first, starting below the task [before]. */
+  suspend fun list(before: String?, limit: Int): List<Task>
 }
 
 internal interface TaskActions {
@@ -48,6 +51,13 @@ internal class TaskExecutor(
   suspend fun read(id: String?): Task? = command {
     initialize()
     if (id == null || current?.request?.id == id) current else journal.read(id)
+  }
+
+  /** Pages through journaled tasks newest first after reconciling interrupted work. Never dispatches. */
+  suspend fun list(before: String?, limit: Int): List<Task> = command {
+    initialize()
+    require(before == null || journal.read(before) != null) { "Unknown task ID." }
+    journal.list(before, limit)
   }
 
   suspend fun resume(id: String): Task = command {

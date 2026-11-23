@@ -49,6 +49,35 @@ class TaskExecutorTest {
   }
 
   @Test
+  fun `listing after a restart pages through recorded calls newest first without dispatching`() = runTest {
+    fun call(id: String, seconds: Int, vararg phases: Phase) =
+      phases.fold(Task(TaskRequest(id, listOf(Step("timer", Action.StartTimer(seconds)))))) { task, phase ->
+        task.transition("timer", StepState(phase))
+      }
+    val journal = MemoryJournal(
+      call("first", 90, Phase.RUNNING, Phase.ISSUED),
+      call("second", 30, Phase.RUNNING, Phase.FAILED),
+      call("third", 45, Phase.RUNNING),
+    )
+    val actions = FakeActions()
+    val context = backgroundScope.coroutineContext
+    val restarted = TaskExecutor(journal, actions, CoroutineScope(context + SupervisorJob(context[Job])))
+
+    val page = restarted.list(null, 2)
+    val rest = restarted.list(page.last().request.id, 2)
+    runCurrent()
+
+    assertEquals(listOf("third", "second"), page.map { it.request.id })
+    assertEquals(listOf("first"), rest.map { it.request.id })
+    assertEquals(Phase.UNKNOWN, page.first().states.getValue("timer").phase)
+    assertEquals(call("first", 90, Phase.RUNNING, Phase.ISSUED), rest.single())
+    assertTrue(restarted.list("first", 2).isEmpty())
+    assertTrue(runCatching { restarted.list("missing", 2) }.exceptionOrNull() is IllegalArgumentException)
+    runCurrent()
+    assertTrue(actions.dispatched.isEmpty())
+  }
+
+  @Test
   fun `a completed request keeps its result and rejects a changed payload after restart`() = runTest {
     val journal = MemoryJournal()
     val originalActions = FakeActions()
@@ -166,15 +195,21 @@ class TaskExecutorTest {
     }
   }
 
-  private class MemoryJournal(var task: Task? = null) : TaskStore {
+  private class MemoryJournal(vararg saved: Task) : TaskStore {
+    private val tasks = saved.toMutableList()
+    val task get() = tasks.lastOrNull()
     var rejectRunningWrite = false
 
-    override suspend fun read(id: String?) = task?.takeIf { id == null || id == it.request.id }
+    override suspend fun read(id: String?) = if (id == null) task else tasks.find { it.request.id == id }
 
     override suspend fun save(task: Task) {
       check(!rejectRunningWrite || task.states.values.none { it.phase == Phase.RUNNING })
-      this.task = task
+      val index = tasks.indexOfFirst { it.request.id == task.request.id }
+      if (index < 0) tasks += task else tasks[index] = task
     }
+
+    override suspend fun list(before: String?, limit: Int) =
+      tasks.takeWhile { it.request.id != before }.reversed().take(limit)
   }
 
   private class FakeActions(

@@ -51,6 +51,10 @@ export const tasks = {
     const snapshot = await NativeTasks.read(id);
     return snapshot === null ? null : JSON.parse(snapshot);
   },
+  // Pages through journaled tasks newest first; pass the last task ID as `before` for the next page.
+  async list(limit: number, before: string | null = null): Promise<Task[]> {
+    return JSON.parse(await NativeTasks.list(before, limit));
+  },
   async waitForTimer(id: string) {
     const task: Task = JSON.parse(await NativeTasks.waitForTask(id));
     return task.states.timer;

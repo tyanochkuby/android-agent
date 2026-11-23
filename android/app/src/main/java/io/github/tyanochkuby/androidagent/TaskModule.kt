@@ -37,6 +37,11 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
     executor.read(id)?.let { taskJson.encodeToString(it) }
   }
 
+  override fun list(before: String?, limit: Double, promise: Promise) = respond(promise) {
+    require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
+    taskJson.encodeToString(executor.list(before, limit.toInt()))
+  }
+
   override fun waitForTask(id: String, promise: Promise) = respond(promise) {
     val deadline = SystemClock.elapsedRealtime() + 5_000
     var task = checkNotNull(executor.read(id)) { "Task status is unavailable." }

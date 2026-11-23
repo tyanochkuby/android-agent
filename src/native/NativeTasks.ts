@@ -4,6 +4,7 @@ import { TurboModuleRegistry } from 'react-native';
 export interface Spec extends TurboModule {
   submit(request: string): Promise<string>;
   read(id: string | null): Promise<string | null>;
+  list(before: string | null, limit: number): Promise<string>;
   waitForTask(id: string): Promise<string>;
   resume(id: string): Promise<string>;
   cancel(id: string): Promise<string>;
