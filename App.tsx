@@ -23,7 +23,7 @@ type Duration = (typeof durations)[number];
 const historyPage = 20;
 
 // Keep in-flight work and pending writes across component remounts in the same runtime.
-let submitting = false;
+let submission: Promise<void> | null = null;
 let startAttempt: string | null = null;
 let unsaved: { id: string; outcome: Outcome } | null = null;
 
@@ -31,7 +31,7 @@ export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(submission !== null);
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [sessionId, setSessionId] = useState<string>();
@@ -89,13 +89,38 @@ export default function App() {
 
   useEffect(() => {
     if (!__DEV__) return;
-    conversation.read(historyPage).then(
-      page => {
-        setHistory(page);
-        setEarlier(page.length === historyPage);
-      },
-      () => setAnswer('Could not load the conversation.'),
-    );
+    let active = true;
+    const pendingSubmission = submission;
+    async function refreshHistory() {
+      try {
+        const page = await conversation.read(historyPage);
+        if (active) {
+          setHistory(page);
+          setEarlier(page.length === historyPage);
+        }
+      } catch {
+        if (active) setAnswer('Could not load the conversation.');
+      }
+    }
+
+    (async () => {
+      await refreshHistory();
+      if (pendingSubmission) {
+        await pendingSubmission;
+        if (!active) return;
+        const [snapshot] = await Promise.all([
+          tasks.read().catch(() => undefined),
+          refreshHistory(),
+        ]);
+        if (active) {
+          if (snapshot !== undefined) updateTask(snapshot);
+          setPending(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -110,7 +135,7 @@ export default function App() {
       const version = revision.current;
       try {
         const snapshot = await tasks.read();
-        if (active && !submitting && revision.current === version) {
+        if (active && submission === null && revision.current === version) {
           updateTask(snapshot);
         }
       } catch (error) {
@@ -141,15 +166,19 @@ export default function App() {
     };
   }, [running]);
 
-  async function handle(operation: () => Promise<Task | void>) {
-    if (submitting) return;
-    submitting = true;
+  function handle(operation: () => Promise<Task | void>) {
+    if (submission) return;
+    submission = runSubmission(operation);
+    return submission;
+  }
+
+  async function runSubmission(operation: () => Promise<Task | void>) {
     revision.current++;
     setPending(true);
     setStatus('');
 
     try {
-      const snapshot = await operation();
+      const snapshot = await Promise.resolve().then(operation);
       if (snapshot) updateTask(snapshot);
     } catch (error) {
       setStatus(
@@ -158,7 +187,7 @@ export default function App() {
           : 'Could not complete the request.',
       );
     } finally {
-      submitting = false;
+      submission = null;
       setPending(false);
     }
   }
@@ -361,7 +390,9 @@ export default function App() {
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || !prompt.trim()}
-                    onPress={askAgent}
+                    onPress={() => {
+                      askAgent();
+                    }}
                     style={styles.button}
                   >
                     <Text style={styles.buttonText}>Run prompt</Text>

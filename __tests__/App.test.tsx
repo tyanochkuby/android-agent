@@ -404,6 +404,33 @@ test('saves the prompt before inference and sends completed turns with a follow-
   expect(screen.getByText('Your dog is Rex.')).toBeTruthy();
 });
 
+test('a remounted screen shows the reply when an in-flight prompt settles', async () => {
+  let resolveReply!: (reply: string) => void;
+  const model = jest.fn(
+    () =>
+      new Promise<string>(resolve => {
+        resolveReply = resolve;
+      }),
+  );
+  const mounted = await render(<App />);
+  const bridge = await connectCompanion(model);
+  try {
+    await ask('First prompt');
+    expect(model).toHaveBeenCalledTimes(1);
+    await mounted.unmount();
+    await render(<App />);
+    expect(screen.getByText('Working…')).toBeTruthy();
+    await act(async () => {
+      resolveReply('[{"tool":"finish","message":"First reply."}]');
+    });
+    expect(screen.getByText('First reply.')).toBeTruthy();
+    expect(screen.queryByText('Working…')).toBeNull();
+    expect(model).toHaveBeenCalledTimes(1);
+  } finally {
+    bridge.mockRestore();
+  }
+});
+
 test.each([
   ['is rejected', false],
   ['lands without an acknowledgement', true],
