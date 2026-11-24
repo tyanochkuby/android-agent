@@ -44,6 +44,19 @@ internal fun createConversationSchema(db: SQLiteDatabase) {
   )
 }
 
+/** Links a new task to its running turn within the task insert transaction. */
+internal fun linkTaskToTurn(db: SQLiteDatabase, turn: String, task: String) {
+  check(DatabaseUtils.queryNumEntries(db, "turns", "sequence = ? AND status = 'RUNNING'", arrayOf(turn)) == 1L) {
+    "This prompt is no longer running."
+  }
+  val values = ContentValues().apply {
+    put("turn", turn)
+    put("task", task)
+  }
+  db.insertOrThrow("turn_tasks", null, values)
+}
+
+
 /**
  * Device-local prompts, replies and turn status. Actions stay in the task journal; a turn only records the IDs of
  * tasks submitted while it ran.
@@ -67,18 +80,6 @@ internal class Conversation(private val database: SQLiteOpenHelper) {
   suspend fun interruptRunning(): Unit = write { db ->
     val values = ContentValues().apply { put("status", TurnStatus.INTERRUPTED.name) }
     db.update("turns", values, "status = 'RUNNING'", null)
-  }
-
-  /** Records that [task] was submitted for the running turn [turn]. Call before submitting the task. */
-  suspend fun link(turn: String, task: String): Unit = write { db ->
-    check(DatabaseUtils.queryNumEntries(db, "turns", "sequence = ? AND status = 'RUNNING'", arrayOf(turn)) == 1L) {
-      "This prompt is no longer running."
-    }
-    val values = ContentValues().apply {
-      put("turn", turn)
-      put("task", task)
-    }
-    db.insertWithOnConflict("turn_tasks", null, values, SQLiteDatabase.CONFLICT_IGNORE)
   }
 
   /** Returns up to [limit] turns, newest first, starting below the turn [before]. */

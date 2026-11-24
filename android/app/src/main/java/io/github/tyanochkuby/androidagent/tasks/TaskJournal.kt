@@ -60,11 +60,23 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     }
   }
 
-  override suspend fun save(task: Task): Unit = withContext(Dispatchers.IO) {
+  override suspend fun save(task: Task, turn: String?): Unit = withContext(Dispatchers.IO) {
     val snapshot = ContentValues().apply {
       put("snapshot", taskJson.encodeToString(task))
     }
     val db = writableDatabase
+    if (turn != null) {
+      db.beginTransaction()
+      try {
+        snapshot.put("id", task.request.id)
+        db.insertOrThrow("tasks", null, snapshot)
+        linkTaskToTurn(db, turn, task.request.id)
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+      return@withContext
+    }
     if (db.update("tasks", snapshot, "id = ?", arrayOf(task.request.id)) == 0) {
       snapshot.put("id", task.request.id)
       db.insertOrThrow("tasks", null, snapshot)

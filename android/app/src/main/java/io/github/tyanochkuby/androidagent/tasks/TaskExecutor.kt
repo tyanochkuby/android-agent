@@ -10,7 +10,7 @@ import kotlinx.coroutines.sync.withLock
 
 internal interface TaskStore {
   suspend fun read(id: String?): Task?
-  suspend fun save(task: Task)
+  suspend fun save(task: Task, turn: String? = null)
 
   /** Returns up to [limit] tasks in submission order, newest first, starting below the task [before]. */
   suspend fun list(before: String?, limit: Int): List<Task>
@@ -33,7 +33,7 @@ internal class TaskExecutor(
   private var session: Long? = null
   private var journalFailure: Exception? = null
 
-  suspend fun submit(request: TaskRequest): Task = command {
+  suspend fun submit(request: TaskRequest, turn: String? = null): Task = command {
     initialize()
     journal.read(request.id)?.let {
       require(it.request == request) { "This task ID belongs to a different request." }
@@ -41,7 +41,7 @@ internal class TaskExecutor(
     }
     check(current?.finished != false) { "Finish or cancel the current task first." }
     session = actions.foregroundSessionId
-    save(Task(request)).also { schedule() }
+    save(Task(request), turn).also { schedule() }
   }
 
   fun reconcile() = launchWorker {
@@ -110,8 +110,8 @@ internal class TaskExecutor(
     schedule()
   }
 
-  private suspend fun save(task: Task): Task {
-    journal.save(task)
+  private suspend fun save(task: Task, turn: String? = null): Task {
+    journal.save(task, turn)
     current = task
     return task
   }

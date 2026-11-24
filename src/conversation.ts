@@ -40,7 +40,7 @@ export const conversation = {
     const turns = await readTurns(limit, before);
     return Promise.all(
       turns.map(async ({ taskIds, ...turn }) => {
-        const linked = await Promise.all(taskIds.map(id => tasks.read(id)));
+        const linked = await Promise.all(taskIds.map(id => tasks.read(id).catch(() => null)));
         return { ...turn, tasks: linked.filter(task => task !== null) };
       }),
     );

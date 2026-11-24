@@ -13,13 +13,13 @@ import io.github.tyanochkuby.androidagent.tasks.TaskRequest
 import io.github.tyanochkuby.androidagent.tasks.taskJson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -28,7 +28,15 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   private val conversation = application.conversation
 
   // Turns run in JavaScript, so a turn still running when this runtime starts was interrupted.
-  private val recovered = scope.async(start = CoroutineStart.LAZY) { conversation.interruptRunning() }
+  private val recoveryLock = Mutex()
+  private var recovered = false
+
+  private suspend fun recoverConversation() = recoveryLock.withLock {
+    if (!recovered) {
+      conversation.interruptRunning()
+      recovered = true
+    }
+  }
 
   override fun getName() = NAME
 
@@ -37,11 +45,8 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
     require(request.length <= 65_536) { "Task request is too large." }
     val parsed = taskJson.decodeFromString<TaskRequest>(request)
     parsed.validate()
-    if (turn != null) {
-      recovered.await()
-      conversation.link(turn, parsed.id)
-    }
-    taskJson.encodeToString(executor.submit(parsed))
+    if (turn != null) recoverConversation()
+    taskJson.encodeToString(executor.submit(parsed, turn))
   }
 
   override fun read(id: String?, promise: Promise) = respond(promise) {
@@ -55,40 +60,40 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
 
   override fun readConversation(before: String?, limit: Double, promise: Promise) = respond(promise) {
     require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
-    recovered.await()
+    recoverConversation()
     taskJson.encodeToString(conversation.read(before, limit.toInt()))
   }
 
   override fun readCompletedTurns(after: String?, limit: Double, promise: Promise) = respond(promise) {
     require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
-    recovered.await()
+    recoverConversation()
     taskJson.encodeToString(conversation.readCompleted(after, limit.toInt()))
   }
 
   override fun readCheckpoint(promise: Promise) = respond(promise) {
-    recovered.await()
+    recoverConversation()
     conversation.readCheckpoint()?.let { taskJson.encodeToString(it) }
   }
 
   override fun saveCheckpoint(summary: String, covers: String, promise: Promise) = respond(promise) {
-    recovered.await()
+    recoverConversation()
     conversation.saveCheckpoint(summary, covers)
     null
   }
 
   override fun startTurn(prompt: String, promise: Promise) = respond(promise) {
-    recovered.await()
+    recoverConversation()
     conversation.start(prompt)
   }
 
   override fun completeTurn(id: String, reply: String, promise: Promise) = respond(promise) {
-    recovered.await()
+    recoverConversation()
     conversation.complete(id, reply)
     null
   }
 
   override fun failTurn(id: String, detail: String, promise: Promise) = respond(promise) {
-    recovered.await()
+    recoverConversation()
     conversation.fail(id, detail)
     null
   }

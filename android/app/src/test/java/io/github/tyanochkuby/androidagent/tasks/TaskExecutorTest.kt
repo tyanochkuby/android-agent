@@ -202,7 +202,7 @@ class TaskExecutorTest {
 
     override suspend fun read(id: String?) = if (id == null) task else tasks.find { it.request.id == id }
 
-    override suspend fun save(task: Task) {
+    override suspend fun save(task: Task, turn: String?) {
       check(!rejectRunningWrite || task.states.values.none { it.phase == Phase.RUNNING })
       val index = tasks.indexOfFirst { it.request.id == task.request.id }
       if (index < 0) tasks += task else tasks[index] = task
