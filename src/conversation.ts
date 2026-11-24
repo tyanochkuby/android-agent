@@ -48,8 +48,8 @@ export const conversation = {
     );
   },
   // Saves the prompt as a running turn and returns its ID.
-  start: (prompt: string, recoverUnacknowledged: boolean) =>
-    NativeTasks.startTurn(prompt, recoverUnacknowledged),
+  start: (prompt: string, attempt: string) =>
+    NativeTasks.startTurn(prompt, attempt),
   // Returns model input from completed turns: the checkpoint, then exact turns after its coverage.
   // Near the budget it first summarizes that input through `model` and switches to the saved summary.
   async context(model: Model, budget = contextBudget): Promise<Message[]> {

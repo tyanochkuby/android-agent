@@ -34,6 +34,7 @@ internal fun createConversationSchema(db: SQLiteDatabase) {
       "status TEXT NOT NULL, detail TEXT, legacy_sequence INTEGER UNIQUE)",
   )
   db.execSQL("CREATE TABLE IF NOT EXISTS turn_tasks (turn INTEGER NOT NULL, task TEXT NOT NULL, PRIMARY KEY (turn, task))")
+  db.execSQL("CREATE TABLE IF NOT EXISTS turn_starts (attempt TEXT PRIMARY KEY, turn INTEGER NOT NULL)")
   db.execSQL("CREATE TABLE IF NOT EXISTS checkpoints (sequence INTEGER PRIMARY KEY, summary TEXT NOT NULL, covers INTEGER NOT NULL)")
   if (DatabaseUtils.queryNumEntries(db, "sqlite_master", "type = 'table' AND name = 'conversation'") == 0L) return
   db.execSQL(
@@ -62,18 +63,28 @@ internal fun linkTaskToTurn(db: SQLiteDatabase, turn: String, task: String) {
  * tasks submitted while it ran.
  */
 internal class Conversation(private val database: SQLiteOpenHelper) {
-  suspend fun start(prompt: String, recoverUnacknowledged: Boolean): String = write { db ->
+  suspend fun start(prompt: String, attempt: String): String = write { db ->
     require(prompt.isNotBlank() && prompt.length <= MAX_TEXT) { "Invalid prompt." }
-    if (recoverUnacknowledged) {
-      val values = ContentValues().apply { put("status", TurnStatus.INTERRUPTED.name) }
-      db.update("turns", values, "status = 'RUNNING'", null)
-    }
+    val interrupted = ContentValues().apply { put("status", TurnStatus.INTERRUPTED.name) }
+    db.update(
+      "turns", interrupted,
+      "status = 'RUNNING' AND sequence = (SELECT turn FROM turn_starts WHERE attempt = ?)",
+      arrayOf(attempt),
+    )
     check(DatabaseUtils.queryNumEntries(db, "turns", "status = 'RUNNING'") == 0L) { "Finish the current prompt first." }
     val values = ContentValues().apply {
       put("prompt", prompt)
       put("status", TurnStatus.RUNNING.name)
     }
-    db.insertOrThrow("turns", null, values).toString()
+    val id = db.insertOrThrow("turns", null, values)
+    val start = ContentValues().apply {
+      put("attempt", attempt)
+      put("turn", id)
+    }
+    db.insertWithOnConflict("turn_starts", null, start, SQLiteDatabase.CONFLICT_REPLACE).also {
+      check(it != -1L) { "Could not record the prompt start." }
+    }
+    id.toString()
   }
 
   suspend fun complete(id: String, reply: String) = finish(id, TurnStatus.COMPLETED, "reply", reply)

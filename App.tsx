@@ -39,7 +39,7 @@ export default function App() {
   const [earlier, setEarlier] = useState(false);
   const revision = useRef(0);
   const submitting = useRef(false);
-  const unacknowledgedStart = useRef(false);
+  const startAttempt = useRef<string | null>(null);
   // A finished turn whose outcome could not be saved yet. Saved again before the next prompt.
   const unsaved = useRef<{ id: string; outcome: Outcome } | null>(null);
   const states = Object.values(task?.states ?? {});
@@ -210,19 +210,17 @@ export default function App() {
       if (unsaved.current)
         await save(unsaved.current.id, unsaved.current.outcome);
       // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
-      const id = await conversation
-        .start(message, unacknowledgedStart.current && !unsaved.current)
-        .catch(error => {
-          unacknowledgedStart.current = true;
-          setAnswer(
-            error instanceof Error
-              ? error.message
-              : 'Could not save the prompt.',
-          );
-          return null;
-        });
+      const attempt = (startAttempt.current ??= `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`);
+      const id = await conversation.start(message, attempt).catch(error => {
+        setAnswer(
+          error instanceof Error ? error.message : 'Could not save the prompt.',
+        );
+        return null;
+      });
       if (id === null) return;
-      unacknowledgedStart.current = false;
+      startAttempt.current = null;
       unsaved.current = null;
       setPrompt('');
       await loadHistory().catch(() => {});
