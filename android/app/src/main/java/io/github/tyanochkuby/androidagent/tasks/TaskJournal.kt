@@ -28,6 +28,18 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     }
   }
 
+  // The schema version stays at 1 so earlier builds can still open the journal.
+  override fun onOpen(db: SQLiteDatabase) {
+    if (db.isReadOnly) return
+    db.beginTransaction()
+    try {
+      createConversationSchema(db)
+      db.setTransactionSuccessful()
+    } finally {
+      db.endTransaction()
+    }
+  }
+
   override suspend fun read(id: String?): Task? = withContext(Dispatchers.IO) {
     val query = if (id == null) "SELECT snapshot FROM tasks ORDER BY sequence DESC LIMIT 1"
     else "SELECT snapshot FROM tasks WHERE id = ?"
@@ -48,11 +60,23 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     }
   }
 
-  override suspend fun save(task: Task): Unit = withContext(Dispatchers.IO) {
+  override suspend fun save(task: Task, turn: String?): Unit = withContext(Dispatchers.IO) {
     val snapshot = ContentValues().apply {
       put("snapshot", taskJson.encodeToString(task))
     }
     val db = writableDatabase
+    if (turn != null) {
+      db.beginTransaction()
+      try {
+        snapshot.put("id", task.request.id)
+        db.insertOrThrow("tasks", null, snapshot)
+        linkTaskToTurn(db, turn, task.request.id)
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+      return@withContext
+    }
     if (db.update("tasks", snapshot, "id = ?", arrayOf(task.request.id)) == 0) {
       snapshot.put("id", task.request.id)
       db.insertOrThrow("tasks", null, snapshot)

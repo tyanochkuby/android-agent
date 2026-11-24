@@ -18,19 +18,35 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-  private val executor = (context.applicationContext as MainApplication).taskExecutor
+  private val application = context.applicationContext as MainApplication
+  private val executor = application.taskExecutor
+  private val conversation = application.conversation
+
+  // Turns run in JavaScript, so a turn still running when this runtime starts was interrupted.
+  private val recoveryLock = Mutex()
+  private var recovered = false
+
+  private suspend fun recoverConversation() = recoveryLock.withLock {
+    if (!recovered) {
+      conversation.interruptRunning()
+      recovered = true
+    }
+  }
 
   override fun getName() = NAME
 
-  override fun submit(request: String, promise: Promise) = respond(promise) {
+  override fun submit(request: String, turn: String?, promise: Promise) = respond(promise) {
     check(uiSession == null) { "Close the UI workflow before submitting another task." }
     require(request.length <= 65_536) { "Task request is too large." }
     val parsed = taskJson.decodeFromString<TaskRequest>(request)
     parsed.validate()
-    taskJson.encodeToString(executor.submit(parsed))
+    if (turn != null) recoverConversation()
+    taskJson.encodeToString(executor.submit(parsed, turn))
   }
 
   override fun read(id: String?, promise: Promise) = respond(promise) {
@@ -40,6 +56,46 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   override fun list(before: String?, limit: Double, promise: Promise) = respond(promise) {
     require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
     taskJson.encodeToString(executor.list(before, limit.toInt()))
+  }
+
+  override fun readConversation(before: String?, limit: Double, promise: Promise) = respond(promise) {
+    require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
+    recoverConversation()
+    taskJson.encodeToString(conversation.read(before, limit.toInt()))
+  }
+
+  override fun readCompletedTurns(after: String?, limit: Double, promise: Promise) = respond(promise) {
+    require(limit in 1.0..20.0 && limit % 1 == 0.0) { "Use a limit from 1 to 20." }
+    recoverConversation()
+    taskJson.encodeToString(conversation.readCompleted(after, limit.toInt()))
+  }
+
+  override fun readCheckpoint(promise: Promise) = respond(promise) {
+    recoverConversation()
+    conversation.readCheckpoint()?.let { taskJson.encodeToString(it) }
+  }
+
+  override fun saveCheckpoint(summary: String, covers: String, promise: Promise) = respond(promise) {
+    recoverConversation()
+    conversation.saveCheckpoint(summary, covers)
+    null
+  }
+
+  override fun startTurn(prompt: String, attempt: String, promise: Promise) = respond(promise) {
+    recoverConversation()
+    conversation.start(prompt, attempt)
+  }
+
+  override fun completeTurn(id: String, reply: String, promise: Promise) = respond(promise) {
+    recoverConversation()
+    conversation.complete(id, reply)
+    null
+  }
+
+  override fun failTurn(id: String, detail: String, promise: Promise) = respond(promise) {
+    recoverConversation()
+    conversation.fail(id, detail)
+    null
   }
 
   override fun waitForTask(id: String, promise: Promise) = respond(promise) {

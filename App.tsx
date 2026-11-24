@@ -15,9 +15,18 @@ import type { Task, TaskRequest } from './src/tasks';
 import { runAgent } from './src/agent';
 import { agentTools } from './src/agentTools';
 import { companion } from './src/companion';
+import { conversation } from './src/conversation';
+import type { Outcome, Turn } from './src/conversation';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
+const historyPage = 20;
+
+// Keep in-flight work and pending writes across component remounts in the same runtime.
+let submission: Promise<string | undefined> | null = null;
+const promptSavedListeners = new Set<() => void>();
+let startAttempt: string | null = null;
+let unsaved: { id: string; outcome: Outcome } | null = null;
 
 export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
@@ -26,18 +35,106 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
-  const [connected, setConnected] = useState(false);
+  const [sessionId, setSessionId] = useState<string>();
+  const connected = sessionId !== undefined;
+  const [shareHistory, setShareHistory] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
+  const [history, setHistory] = useState<Turn[]>([]);
+  const [earlier, setEarlier] = useState(false);
   const revision = useRef(0);
-  const submitting = useRef(false);
   const states = Object.values(task?.states ?? {});
   const running = states.some(
     ({ phase }) => phase === 'QUEUED' || phase === 'RUNNING',
   );
   const paused = states.some(({ phase }) => phase === 'PAUSED');
   const busy = loading || pending || running || paused;
+
+  function updateTask(snapshot: Task | null) {
+    setTask(snapshot);
+    if (!snapshot) return;
+    setHistory(current =>
+      current.map(turn =>
+        turn.tasks.some(linked => linked.request.id === snapshot.request.id)
+          ? {
+              ...turn,
+              tasks: turn.tasks.map(linked =>
+                linked.request.id === snapshot.request.id ? snapshot : linked,
+              ),
+            }
+          : turn,
+      ),
+    );
+  }
+
+  async function loadHistory(before: string | null = null) {
+    const page = await conversation.read(historyPage, before);
+    if (before !== null || page.length === historyPage) {
+      setEarlier(page.length === historyPage);
+    }
+    setHistory(current => {
+      if (before !== null) {
+        const ids = new Set(current.map(turn => turn.id));
+        return [...current, ...page.filter(turn => !ids.has(turn.id))];
+      }
+      const oldest = page.at(-1)?.id;
+      return [
+        ...page,
+        ...current.filter(
+          turn => oldest !== undefined && BigInt(turn.id) < BigInt(oldest),
+        ),
+      ];
+    });
+  }
+
+  useEffect(() => {
+    let active = true;
+    let historyRead = 0;
+    const pendingSubmission = submission;
+    async function refreshHistory() {
+      if (!__DEV__) return;
+      const read = ++historyRead;
+      try {
+        const page = await conversation.read(historyPage);
+        if (active && read === historyRead) {
+          setHistory(page);
+          setEarlier(page.length === historyPage);
+        }
+      } catch {
+        if (active && read === historyRead)
+          setAnswer('Could not load the conversation.');
+      }
+    }
+
+    if (pendingSubmission) {
+      setPending(true);
+      promptSavedListeners.add(refreshHistory);
+    }
+    (async () => {
+      await refreshHistory();
+      if (active && !pendingSubmission && unsaved)
+        setAnswer(unsavedText(unsaved.outcome));
+      if (pendingSubmission) {
+        const failure = await pendingSubmission;
+        if (!active) return;
+        const [snapshot] = await Promise.all([
+          tasks.read().catch(() => undefined),
+          refreshHistory(),
+        ]);
+        if (active) {
+          if (snapshot !== undefined) updateTask(snapshot);
+          if (failure !== undefined) setStatus(failure);
+          if (unsaved) setAnswer(unsavedText(unsaved.outcome));
+          setPending(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+      promptSavedListeners.delete(refreshHistory);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -51,8 +148,8 @@ export default function App() {
       const version = revision.current;
       try {
         const snapshot = await tasks.read();
-        if (active && !submitting.current && revision.current === version) {
-          setTask(snapshot);
+        if (active && submission === null && revision.current === version) {
+          updateTask(snapshot);
         }
       } catch (error) {
         if (active && revision.current === version) {
@@ -82,24 +179,29 @@ export default function App() {
     };
   }, [running]);
 
-  async function handle(operation: () => Promise<Task | void>) {
-    if (submitting.current) return;
-    submitting.current = true;
+  function handle(operation: () => Promise<Task | void>) {
+    if (submission) return;
+    submission = runSubmission(operation);
+    return submission;
+  }
+
+  async function runSubmission(operation: () => Promise<Task | void>) {
     revision.current++;
     setPending(true);
     setStatus('');
 
     try {
-      const snapshot = await operation();
-      if (snapshot) setTask(snapshot);
+      const snapshot = await Promise.resolve().then(operation);
+      if (snapshot) updateTask(snapshot);
     } catch (error) {
-      setStatus(
+      const failure =
         error instanceof Error
           ? error.message
-          : 'Could not complete the request.',
-      );
+          : 'Could not complete the request.';
+      setStatus(failure);
+      return failure;
     } finally {
-      submitting.current = false;
+      submission = null;
       setPending(false);
     }
   }
@@ -115,14 +217,17 @@ export default function App() {
 
   function connect(signIn: boolean) {
     return handle(async () => {
-      setConnected(false);
+      setSessionId(undefined);
+      setShareHistory(false);
       const bridge = companion(pairingCode.trim());
       const connection = await (signIn ? bridge.signIn() : bridge.check());
-      setConnected(connection.ready);
+      setSessionId(connection.ready ? connection.sessionId : undefined);
       setAnswer(
         connection.error ??
           (connection.ready
-            ? ''
+            ? connection.sessionId
+              ? ''
+              : 'Restart the companion with the current build.'
             : connection.signingIn
             ? 'Finish sign-in on the companion computer, then check the connection.'
             : 'Sign in with ChatGPT on the companion computer.'),
@@ -130,25 +235,64 @@ export default function App() {
     });
   }
 
+  async function save(id: string, outcome: Outcome) {
+    try {
+      await conversation.finish(id, outcome);
+      unsaved = null;
+      return true;
+    } catch {
+      unsaved = { id, outcome };
+      return false;
+    }
+  }
+
   function askAgent() {
     return handle(async () => {
-      setAnswer('Working…');
+      setAnswer('');
       setShareScreen(false);
+      const message = prompt.trim();
+      if (unsaved) await save(unsaved.id, unsaved.outcome);
+      // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
+      const attempt = (startAttempt ??= `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`);
+      const id = await conversation.start(message, attempt).catch(error => {
+        setAnswer(
+          error instanceof Error ? error.message : 'Could not save the prompt.',
+        );
+        return null;
+      });
+      if (id === null) return;
+      startAttempt = null;
+      unsaved = null;
+      setPrompt('');
+      promptSavedListeners.forEach(refresh => refresh());
+      await loadHistory().catch(() => {});
+
+      let outcome: Outcome;
       try {
-        setAnswer(
-          await runAgent(
-            prompt.trim(),
-            companion(pairingCode.trim()).model,
-            agentTools,
+        const { model } = companion(pairingCode.trim(), sessionId);
+        outcome = {
+          reply: await runAgent(
+            message,
+            model,
+            agentTools(id),
             shareScreen,
+            shareHistory ? await conversation.context(model) : [],
           ),
-        );
+        };
       } catch (error) {
-        setConnected(false);
-        setAnswer(
-          error instanceof Error ? error.message : 'The agent stopped.',
-        );
+        setSessionId(undefined);
+        outcome = {
+          failure:
+            (error instanceof Error && error.message.trim()) ||
+            'The agent stopped.',
+        };
       }
+      if (!(await save(id, outcome))) {
+        setAnswer(unsavedText(outcome));
+      }
+      await loadHistory().catch(() => {});
       return (await tasks.read()) ?? undefined;
     });
   }
@@ -180,7 +324,8 @@ export default function App() {
                 value={pairingCode}
                 onChangeText={value => {
                   setPairingCode(value);
-                  setConnected(false);
+                  setSessionId(undefined);
+                  setShareHistory(false);
                   setAnswer('');
                 }}
               />
@@ -207,6 +352,22 @@ export default function App() {
               {connected && (
                 <>
                   <Text style={styles.presetText}>Using ChatGPT plan</Text>
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityLabel="Share saved conversation"
+                    accessibilityState={{
+                      checked: shareHistory,
+                      disabled: busy,
+                    }}
+                    disabled={busy}
+                    onPress={() => setShareHistory(value => !value)}
+                    style={[styles.preset, shareHistory && styles.selected]}
+                  >
+                    <Text style={styles.presetText}>
+                      {shareHistory ? '☑' : '☐'} Share saved conversation with
+                      this connection
+                    </Text>
+                  </Pressable>
                   <TextInput
                     accessibilityLabel="Agent prompt"
                     placeholder="What should Android do?"
@@ -222,6 +383,7 @@ export default function App() {
                   />
                   <Pressable
                     accessibilityRole="checkbox"
+                    accessibilityLabel="Share screen for this prompt"
                     accessibilityState={{
                       checked: shareScreen,
                       disabled: busy,
@@ -239,7 +401,9 @@ export default function App() {
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || !prompt.trim()}
-                    onPress={askAgent}
+                    onPress={() => {
+                      askAgent();
+                    }}
                     style={styles.button}
                   >
                     <Text style={styles.buttonText}>Run prompt</Text>
@@ -253,6 +417,57 @@ export default function App() {
                 >
                   {answer}
                 </Text>
+              )}
+              {history.length > 0 && (
+                <View style={styles.history}>
+                  <Text accessibilityRole="header" style={styles.presetText}>
+                    Conversation
+                  </Text>
+                  {earlier && (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() =>
+                        loadHistory(history[history.length - 1].id).catch(() =>
+                          setAnswer('Could not load earlier turns.'),
+                        )
+                      }
+                      style={styles.preset}
+                    >
+                      <Text style={styles.presetText}>Show earlier</Text>
+                    </Pressable>
+                  )}
+                  {history
+                    .slice()
+                    .reverse()
+                    .map(turn => (
+                      <View key={turn.id} style={styles.turn}>
+                        <Text style={styles.presetText}>You</Text>
+                        <Text selectable style={styles.description}>
+                          {turn.prompt}
+                        </Text>
+                        <Text style={styles.presetText}>Android Agent</Text>
+                        <Text selectable style={styles.description}>
+                          {turn.id === unsaved?.id && turn.status === 'RUNNING'
+                            ? 'Result pending save.'
+                            : turnText(turn)}
+                        </Text>
+                        {turn.tasks.flatMap(linked =>
+                          linked.request.steps.map(step => (
+                            <Text
+                              key={`${linked.request.id}-${step.id}`}
+                              style={styles.description}
+                            >
+                              {`${step.id}: ${(task?.request.id ===
+                              linked.request.id
+                                ? task
+                                : linked
+                              ).states[step.id].phase.toLowerCase()}`}
+                            </Text>
+                          )),
+                        )}
+                      </View>
+                    ))}
+                </View>
               )}
             </View>
           )}
@@ -393,6 +608,24 @@ export default function App() {
   );
 }
 
+function unsavedText(outcome: Outcome) {
+  const text = 'reply' in outcome ? outcome.reply : outcome.failure;
+  return `${text}\n\nCould not save this result. It will be saved again with your next prompt.`;
+}
+
+function turnText({ status, reply, detail }: Turn) {
+  switch (status) {
+    case 'RUNNING':
+      return 'Working…';
+    case 'COMPLETED':
+      return reply;
+    case 'FAILED':
+      return detail ?? 'The agent stopped.';
+    case 'INTERRUPTED':
+      return detail ?? 'Interrupted before a reply was saved.';
+  }
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#151613' },
   content: {
@@ -439,6 +672,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     minHeight: 48,
   },
+  history: { gap: 12 },
+  turn: { borderTopWidth: 1, borderColor: '#3B4133', paddingTop: 12, gap: 4 },
   selected: { backgroundColor: '#3A472D', borderColor: '#C9F37B' },
   presetText: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },
   button: {
