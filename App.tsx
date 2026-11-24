@@ -29,7 +29,8 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
-  const [connected, setConnected] = useState(false);
+  const [sessionId, setSessionId] = useState<string>();
+  const connected = sessionId !== undefined;
   const [shareHistory, setShareHistory] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
@@ -47,6 +48,23 @@ export default function App() {
   );
   const paused = states.some(({ phase }) => phase === 'PAUSED');
   const busy = loading || pending || running || paused;
+
+  function updateTask(snapshot: Task | null) {
+    setTask(snapshot);
+    if (!snapshot) return;
+    setHistory(current =>
+      current.map(turn =>
+        turn.tasks.some(linked => linked.request.id === snapshot.request.id)
+          ? {
+              ...turn,
+              tasks: turn.tasks.map(linked =>
+                linked.request.id === snapshot.request.id ? snapshot : linked,
+              ),
+            }
+          : turn,
+      ),
+    );
+  }
 
   async function loadHistory(before: string | null = null) {
     const page = await conversation.read(historyPage, before);
@@ -92,7 +110,7 @@ export default function App() {
       try {
         const snapshot = await tasks.read();
         if (active && !submitting.current && revision.current === version) {
-          setTask(snapshot);
+          updateTask(snapshot);
         }
       } catch (error) {
         if (active && revision.current === version) {
@@ -131,7 +149,7 @@ export default function App() {
 
     try {
       const snapshot = await operation();
-      if (snapshot) setTask(snapshot);
+      if (snapshot) updateTask(snapshot);
     } catch (error) {
       setStatus(
         error instanceof Error
@@ -155,15 +173,17 @@ export default function App() {
 
   function connect(signIn: boolean) {
     return handle(async () => {
-      setConnected(false);
+      setSessionId(undefined);
       setShareHistory(false);
       const bridge = companion(pairingCode.trim());
       const connection = await (signIn ? bridge.signIn() : bridge.check());
-      setConnected(connection.ready);
+      setSessionId(connection.ready ? connection.sessionId : undefined);
       setAnswer(
         connection.error ??
           (connection.ready
-            ? ''
+            ? connection.sessionId
+              ? ''
+              : 'Restart the companion with the current build.'
             : connection.signingIn
             ? 'Finish sign-in on the companion computer, then check the connection.'
             : 'Sign in with ChatGPT on the companion computer.'),
@@ -209,7 +229,7 @@ export default function App() {
 
       let outcome: Outcome;
       try {
-        const { model } = companion(pairingCode.trim());
+        const { model } = companion(pairingCode.trim(), sessionId);
         outcome = {
           reply: await runAgent(
             message,
@@ -220,7 +240,7 @@ export default function App() {
           ),
         };
       } catch (error) {
-        setConnected(false);
+        setSessionId(undefined);
         outcome = {
           failure:
             (error instanceof Error && error.message.trim()) ||
@@ -266,7 +286,7 @@ export default function App() {
                 value={pairingCode}
                 onChangeText={value => {
                   setPairingCode(value);
-                  setConnected(false);
+                  setSessionId(undefined);
                   setShareHistory(false);
                   setAnswer('');
                 }}

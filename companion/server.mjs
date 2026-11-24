@@ -57,11 +57,15 @@ const authorization = Buffer.from(`Bearer ${pairingCode}`);
 let signingIn = false;
 let signInError;
 let model;
+let sessionId = randomBytes(16).toString('hex');
+let activeInferences = 0;
 
 async function status() {
+  const checkedSession = sessionId;
   const session = await chatgpt.getSession();
   return {
-    ready: session.sharing,
+    ready: session.sharing && !signingIn && checkedSession === sessionId,
+    sessionId: checkedSession,
     signingIn,
     ...(signInError && { error: signInError }),
   };
@@ -69,7 +73,12 @@ async function status() {
 
 function signIn() {
   if (signingIn) return;
+  if (activeInferences)
+    throw new Error(
+      'Wait for the current request to finish before signing in.',
+    );
   signingIn = true;
+  sessionId = randomBytes(16).toString('hex');
   signInError = undefined;
   model = undefined;
   chatgpt
@@ -89,11 +98,6 @@ function signIn() {
 }
 
 async function infer(request, signal) {
-  if (signingIn)
-    throw new Error('Finish signing in on the companion computer.');
-  if (!(await chatgpt.getSession()).sharing) {
-    throw new Error('Sign in with ChatGPT and allow plan usage first.');
-  }
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -101,10 +105,27 @@ async function infer(request, signal) {
     if (size > 2_000_000) throw new Error('The prompt context is too large.');
     chunks.push(chunk);
   }
-  const { instructions, input } = JSON.parse(Buffer.concat(chunks).toString());
-  model ??= (await chatgpt.listModels({ signal }))[0]?.slug;
-  if (!model) throw new Error('The ChatGPT account has no available models.');
-  return chatgpt.streamResponse({ model, instructions, input, signal });
+  const {
+    instructions,
+    input,
+    sessionId: expectedSession,
+  } = JSON.parse(Buffer.concat(chunks).toString());
+  if (signingIn || expectedSession !== sessionId) {
+    throw new Error(
+      'The companion session changed. Check the connection again.',
+    );
+  }
+  activeInferences++;
+  try {
+    if (!(await chatgpt.getSession()).sharing) {
+      throw new Error('Sign in with ChatGPT and allow plan usage first.');
+    }
+    model ??= (await chatgpt.listModels({ signal }))[0]?.slug;
+    if (!model) throw new Error('The ChatGPT account has no available models.');
+    return await chatgpt.streamResponse({ model, instructions, input, signal });
+  } finally {
+    activeInferences--;
+  }
 }
 
 const server = createServer(async (request, response) => {

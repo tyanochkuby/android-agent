@@ -1,8 +1,13 @@
 import type { Model } from './agent';
 
-type Connection = { ready: boolean; signingIn: boolean; error?: string };
+type Connection = {
+  ready: boolean;
+  signingIn: boolean;
+  sessionId?: string;
+  error?: string;
+};
 
-export function companion(pairingCode: string) {
+export function companion(pairingCode: string, sessionId?: string) {
   async function request<T>(path: string, method: string, body?: object) {
     // React Native fetch uses JS timers to deliver replies. Direct XHR
     // callbacks continue while the target app owns the foreground.
@@ -30,6 +35,7 @@ export function companion(pairingCode: string) {
 
   const model: Model = async (instructions, input) => {
     const result = await request<{ text: string }>('/infer', 'POST', {
+      sessionId,
       instructions,
       input,
     });

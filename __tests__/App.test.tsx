@@ -110,7 +110,9 @@ async function connectCompanion(model: jest.Mock) {
   const bridge = jest.spyOn(require('../src/companion'), 'companion');
   bridge.mockReturnValue({
     signIn: jest.fn(),
-    check: jest.fn().mockResolvedValue({ ready: true }),
+    check: jest
+      .fn()
+      .mockResolvedValue({ ready: true, sessionId: 'test-session' }),
     model,
   } satisfies ReturnType<typeof companion>);
   await fireEvent.changeText(
@@ -272,7 +274,9 @@ test('shows recovered window evidence alongside an unknown launch outcome', asyn
 test('starts companion sign-in and runs a prompt once plan usage is enabled', async () => {
   const bridge = jest.spyOn(require('../src/companion'), 'companion');
   const signIn = jest.fn().mockResolvedValue({ signingIn: true });
-  const check = jest.fn().mockResolvedValue({ ready: true });
+  const check = jest
+    .fn()
+    .mockResolvedValue({ ready: true, sessionId: 'test-session' });
   const model = jest
     .fn()
     .mockResolvedValue(
