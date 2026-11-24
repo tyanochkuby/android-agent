@@ -24,6 +24,7 @@ const historyPage = 20;
 
 // Keep in-flight work and pending writes across component remounts in the same runtime.
 let submission: Promise<void> | null = null;
+const promptSavedListeners = new Set<() => void>();
 let startAttempt: string | null = null;
 let unsaved: { id: string; outcome: Outcome } | null = null;
 
@@ -88,23 +89,29 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!__DEV__) return;
     let active = true;
+    let historyRead = 0;
     const pendingSubmission = submission;
     async function refreshHistory() {
+      if (!__DEV__) return;
+      const read = ++historyRead;
       try {
         const page = await conversation.read(historyPage);
-        if (active) {
+        if (active && read === historyRead) {
           setHistory(page);
           setEarlier(page.length === historyPage);
         }
       } catch {
-        if (active) setAnswer('Could not load the conversation.');
+        if (active && read === historyRead)
+          setAnswer('Could not load the conversation.');
       }
     }
 
+    if (pendingSubmission) promptSavedListeners.add(refreshHistory);
     (async () => {
       await refreshHistory();
+      if (active && !pendingSubmission && unsaved)
+        setAnswer(unsavedText(unsaved.outcome));
       if (pendingSubmission) {
         await pendingSubmission;
         if (!active) return;
@@ -114,12 +121,14 @@ export default function App() {
         ]);
         if (active) {
           if (snapshot !== undefined) updateTask(snapshot);
+          if (unsaved) setAnswer(unsavedText(unsaved.outcome));
           setPending(false);
         }
       }
     })();
     return () => {
       active = false;
+      promptSavedListeners.delete(refreshHistory);
     };
   }, []);
 
@@ -252,6 +261,7 @@ export default function App() {
       startAttempt = null;
       unsaved = null;
       setPrompt('');
+      promptSavedListeners.forEach(refresh => refresh());
       await loadHistory().catch(() => {});
 
       let outcome: Outcome;
@@ -275,11 +285,7 @@ export default function App() {
         };
       }
       if (!(await save(id, outcome))) {
-        setAnswer(
-          `${
-            'reply' in outcome ? outcome.reply : outcome.failure
-          }\n\nCould not save this result. It will be saved again with your next prompt.`,
-        );
+        setAnswer(unsavedText(outcome));
       }
       await loadHistory().catch(() => {});
       return (await tasks.read()) ?? undefined;
@@ -436,7 +442,9 @@ export default function App() {
                         </Text>
                         <Text style={styles.presetText}>Android Agent</Text>
                         <Text selectable style={styles.description}>
-                          {turnText(turn)}
+                          {turn.id === unsaved?.id && turn.status === 'RUNNING'
+                            ? 'Result pending save.'
+                            : turnText(turn)}
                         </Text>
                         {turn.tasks.flatMap(linked =>
                           linked.request.steps.map(step => (
@@ -593,6 +601,11 @@ export default function App() {
       </SafeAreaView>
     </SafeAreaProvider>
   );
+}
+
+function unsavedText(outcome: Outcome) {
+  const text = 'reply' in outcome ? outcome.reply : outcome.failure;
+  return `${text}\n\nCould not save this result. It will be saved again with your next prompt.`;
 }
 
 function turnText({ status, reply, detail }: Turn) {

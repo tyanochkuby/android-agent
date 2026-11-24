@@ -412,13 +412,27 @@ test('a remounted screen shows the reply when an in-flight prompt settles', asyn
         resolveReply = resolve;
       }),
   );
+  let commitPrompt!: () => void;
+  const start = jest.mocked(NativeTasks.startTurn);
+  const insert = start.getMockImplementation()!;
+  start.mockImplementationOnce(
+    (prompt, attempt) =>
+      new Promise(resolve => {
+        commitPrompt = () => resolve(insert(prompt, attempt));
+      }),
+  );
   const mounted = await render(<App />);
   const bridge = await connectCompanion(model);
   try {
     await ask('First prompt');
-    expect(model).toHaveBeenCalledTimes(1);
     await mounted.unmount();
     await render(<App />);
+    expect(screen.queryByText('First prompt')).toBeNull();
+    await act(async () => {
+      commitPrompt();
+    });
+    expect(screen.getByText('First prompt')).toBeTruthy();
+    expect(model).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Working…')).toBeTruthy();
     await act(async () => {
       resolveReply('[{"tool":"finish","message":"First reply."}]');
