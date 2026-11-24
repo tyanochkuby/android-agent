@@ -15,9 +15,12 @@ import type { Task, TaskRequest } from './src/tasks';
 import { runAgent } from './src/agent';
 import { agentTools } from './src/agentTools';
 import { companion } from './src/companion';
+import { conversation } from './src/conversation';
+import type { Outcome, Turn } from './src/conversation';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
+const historyPage = 20;
 
 export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
@@ -30,14 +33,49 @@ export default function App() {
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
+  const [history, setHistory] = useState<Turn[]>([]);
+  const [earlier, setEarlier] = useState(false);
   const revision = useRef(0);
   const submitting = useRef(false);
+  // A finished turn whose outcome could not be saved yet. Saved again before the next prompt.
+  const unsaved = useRef<{ id: string; outcome: Outcome } | null>(null);
   const states = Object.values(task?.states ?? {});
   const running = states.some(
     ({ phase }) => phase === 'QUEUED' || phase === 'RUNNING',
   );
   const paused = states.some(({ phase }) => phase === 'PAUSED');
   const busy = loading || pending || running || paused;
+
+  async function loadHistory(before: string | null = null) {
+    const page = await conversation.read(historyPage, before);
+    if (before !== null || page.length === historyPage) {
+      setEarlier(page.length === historyPage);
+    }
+    setHistory(current => {
+      if (before !== null) {
+        const ids = new Set(current.map(turn => turn.id));
+        return [...current, ...page.filter(turn => !ids.has(turn.id))];
+      }
+      const oldest = page.at(-1)?.id;
+      return [
+        ...page,
+        ...current.filter(
+          turn => oldest !== undefined && BigInt(turn.id) < BigInt(oldest),
+        ),
+      ];
+    });
+  }
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    conversation.read(historyPage).then(
+      page => {
+        setHistory(page);
+        setEarlier(page.length === historyPage);
+      },
+      () => setAnswer('Could not load the conversation.'),
+    );
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -130,25 +168,64 @@ export default function App() {
     });
   }
 
+  async function save(id: string, outcome: Outcome) {
+    try {
+      await conversation.finish(id, outcome);
+      unsaved.current = null;
+      return true;
+    } catch {
+      unsaved.current = { id, outcome };
+      return false;
+    }
+  }
+
   function askAgent() {
     return handle(async () => {
-      setAnswer('Working…');
+      setAnswer('');
       setShareScreen(false);
-      try {
+      const message = prompt.trim();
+      if (unsaved.current)
+        await save(unsaved.current.id, unsaved.current.outcome);
+      // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
+      const id = await conversation.start(message).catch(error => {
         setAnswer(
-          await runAgent(
-            prompt.trim(),
-            companion(pairingCode.trim()).model,
-            agentTools,
-            shareScreen,
-          ),
+          error instanceof Error ? error.message : 'Could not save the prompt.',
         );
+        return null;
+      });
+      if (id === null) return;
+      unsaved.current = null;
+      setPrompt('');
+      await loadHistory().catch(() => {});
+
+      let outcome: Outcome;
+      try {
+        const { model } = companion(pairingCode.trim());
+        outcome = {
+          reply: await runAgent(
+            message,
+            model,
+            agentTools(id),
+            shareScreen,
+            await conversation.context(model),
+          ),
+        };
       } catch (error) {
         setConnected(false);
+        outcome = {
+          failure:
+            (error instanceof Error && error.message.trim()) ||
+            'The agent stopped.',
+        };
+      }
+      if (!(await save(id, outcome))) {
         setAnswer(
-          error instanceof Error ? error.message : 'The agent stopped.',
+          `${
+            'reply' in outcome ? outcome.reply : outcome.failure
+          }\n\nCould not save this result. It will be saved again with your next prompt.`,
         );
       }
+      await loadHistory().catch(() => {});
       return (await tasks.read()) ?? undefined;
     });
   }
@@ -253,6 +330,53 @@ export default function App() {
                 >
                   {answer}
                 </Text>
+              )}
+              {history.length > 0 && (
+                <View style={styles.history}>
+                  <Text accessibilityRole="header" style={styles.presetText}>
+                    Conversation
+                  </Text>
+                  {earlier && (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() =>
+                        loadHistory(history[history.length - 1].id).catch(() =>
+                          setAnswer('Could not load earlier turns.'),
+                        )
+                      }
+                      style={styles.preset}
+                    >
+                      <Text style={styles.presetText}>Show earlier</Text>
+                    </Pressable>
+                  )}
+                  {history
+                    .slice()
+                    .reverse()
+                    .map(turn => (
+                      <View key={turn.id} style={styles.turn}>
+                        <Text style={styles.presetText}>You</Text>
+                        <Text selectable style={styles.description}>
+                          {turn.prompt}
+                        </Text>
+                        <Text style={styles.presetText}>Android Agent</Text>
+                        <Text selectable style={styles.description}>
+                          {turnText(turn)}
+                        </Text>
+                        {turn.tasks.flatMap(linked =>
+                          linked.request.steps.map(step => (
+                            <Text
+                              key={`${linked.request.id}-${step.id}`}
+                              style={styles.description}
+                            >
+                              {`${step.id}: ${linked.states[
+                                step.id
+                              ].phase.toLowerCase()}`}
+                            </Text>
+                          )),
+                        )}
+                      </View>
+                    ))}
+                </View>
               )}
             </View>
           )}
@@ -393,6 +517,19 @@ export default function App() {
   );
 }
 
+function turnText({ status, reply, detail }: Turn) {
+  switch (status) {
+    case 'RUNNING':
+      return 'Working…';
+    case 'COMPLETED':
+      return reply;
+    case 'FAILED':
+      return detail ?? 'The agent stopped.';
+    case 'INTERRUPTED':
+      return detail ?? 'Interrupted before a reply was saved.';
+  }
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#151613' },
   content: {
@@ -439,6 +576,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     minHeight: 48,
   },
+  history: { gap: 12 },
+  turn: { borderTopWidth: 1, borderColor: '#3B4133', paddingTop: 12, gap: 4 },
   selected: { backgroundColor: '#3A472D', borderColor: '#C9F37B' },
   presetText: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },
   button: {

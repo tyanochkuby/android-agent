@@ -2,13 +2,17 @@ import type { AgentTools } from './agent';
 import NativeTasks from './native/NativeTasks';
 import { tasks } from './tasks';
 
-export const agentTools: AgentTools = {
+// Tasks submitted by these tools are linked to the conversation turn `turn`.
+export const agentTools = (turn: string): AgentTools => ({
   async startTimer(seconds) {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    await tasks.submit({
-      id,
-      steps: [{ id: 'timer', action: { type: 'clock.startTimer', seconds } }],
-    });
+    await tasks.submit(
+      {
+        id,
+        steps: [{ id: 'timer', action: { type: 'clock.startTimer', seconds } }],
+      },
+      turn,
+    );
     return tasks.waitForTimer(id);
   },
   openApp: app => NativeTasks.startUi(app),
@@ -23,4 +27,4 @@ export const agentTools: AgentTools = {
   actUi: (snapshot, index, witness, text) =>
     NativeTasks.actUi(snapshot, index, witness, text),
   closeUi: () => NativeTasks.stopUi(),
-};
+});

@@ -44,8 +44,12 @@ export type Task = {
 };
 
 export const tasks = {
-  async submit(request: TaskRequest): Promise<Task> {
-    return JSON.parse(await NativeTasks.submit(JSON.stringify(request)));
+  // Pass the running conversation turn to link the task to it.
+  async submit(
+    request: TaskRequest,
+    turn: string | null = null,
+  ): Promise<Task> {
+    return JSON.parse(await NativeTasks.submit(JSON.stringify(request), turn));
   },
   async read(id: string | null = null): Promise<Task | null> {
     const snapshot = await NativeTasks.read(id);

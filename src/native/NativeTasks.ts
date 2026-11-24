@@ -2,9 +2,16 @@ import type { TurboModule } from 'react-native';
 import { TurboModuleRegistry } from 'react-native';
 
 export interface Spec extends TurboModule {
-  submit(request: string): Promise<string>;
+  submit(request: string, turn: string | null): Promise<string>;
   read(id: string | null): Promise<string | null>;
   list(before: string | null, limit: number): Promise<string>;
+  readConversation(before: string | null, limit: number): Promise<string>;
+  readCompletedTurns(after: string | null, limit: number): Promise<string>;
+  readCheckpoint(): Promise<string | null>;
+  saveCheckpoint(summary: string, covers: string): Promise<void>;
+  startTurn(prompt: string): Promise<string>;
+  completeTurn(id: string, reply: string): Promise<void>;
+  failTurn(id: string, detail: string): Promise<void>;
   waitForTask(id: string): Promise<string>;
   resume(id: string): Promise<string>;
   cancel(id: string): Promise<string>;

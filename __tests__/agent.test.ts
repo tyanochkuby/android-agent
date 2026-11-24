@@ -1,4 +1,4 @@
-import { runAgent } from '../src/agent';
+import { instructions, requestSize, runAgent } from '../src/agent';
 import type { AgentTools, Model } from '../src/agent';
 
 function device() {
@@ -88,8 +88,8 @@ test('resolves each action against a fresh snapshot', async () => {
     ['maps-old', 0, 0, null],
     ['maps-current', 0, 0, null],
   ]);
-  expect(model.mock.calls[3][1][6].content).toContain('screen changed');
-  const observation = JSON.parse(model.mock.calls[2][1][4].content)
+  expect(model.mock.calls[3][1][7].content).toContain('screen changed');
+  const observation = JSON.parse(model.mock.calls[2][1][5].content)
     .toolResults[0].result;
   expect(observation.elements[0]).toEqual({
     label: 'Search here',
@@ -110,6 +110,11 @@ test('screen sharing defaults off and keeps observations out of model input', as
   );
 
   await runAgent('Open Maps', model, tools);
+  expect(model.mock.calls[0]).toEqual([
+    instructions,
+    [{ role: 'user', content: 'Open Maps' }],
+  ]);
+  expect(instructions).toContain('Screen sharing is off unless');
   expect(tools.openApp).not.toHaveBeenCalled();
   expect(tools.observeUi).not.toHaveBeenCalled();
   expect(JSON.stringify(model.mock.calls[2][1])).not.toContain('Search here');
@@ -141,4 +146,47 @@ test('releases the foreground UI session after inference fails', async () => {
     'disconnected',
   );
   expect(tools.closeUi).toHaveBeenCalledTimes(1);
+});
+
+test('screen sharing adds its tools after the prompt for that request only', async () => {
+  const model = decisions({ tool: 'finish', message: 'Done.' });
+  const history = [
+    { role: 'user' as const, content: 'Earlier' },
+    { role: 'assistant' as const, content: 'Reply' },
+  ];
+
+  await runAgent('Open Maps', model, device(), true, history);
+  const input = model.mock.calls[0][1];
+  expect(input.slice(0, 3)).toEqual([
+    ...history,
+    { role: 'user', content: 'Open Maps' },
+  ]);
+  expect(input[3].content).toMatch(/^Screen sharing is on for this request/);
+  expect(input).toHaveLength(4);
+});
+
+test('does not call the model when the current request alone is over the limit', async () => {
+  const model = decisions({ tool: 'finish', message: 'Done.' });
+  const limit = requestSize([{ role: 'user', content: 'Hi' }]);
+
+  await expect(
+    runAgent('Hello', model, device(), false, [], limit),
+  ).rejects.toThrow('too large to send');
+  expect(model).not.toHaveBeenCalled();
+});
+
+test('stops before a model call once tool results push the request over the limit', async () => {
+  const tools = device();
+  tools.startTimer.mockResolvedValue({ phase: 'ISSUED' });
+  const model = decisions(
+    { tool: 'start_timer', seconds: 90 },
+    { tool: 'finish', message: 'Done.' },
+  );
+  const limit = requestSize([{ role: 'user', content: 'Set a timer' }]);
+
+  await expect(
+    runAgent('Set a timer', model, tools, false, [], limit),
+  ).rejects.toThrow('Check the device for any actions already taken');
+  expect(model).toHaveBeenCalledTimes(1);
+  expect(tools.startTimer).toHaveBeenCalledTimes(1);
 });

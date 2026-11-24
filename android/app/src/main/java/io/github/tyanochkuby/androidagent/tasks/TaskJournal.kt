@@ -28,6 +28,18 @@ internal class TaskJournal(context: Context) : SQLiteOpenHelper(context, "tasks.
     }
   }
 
+  // The schema version stays at 1 so earlier builds can still open the journal.
+  override fun onOpen(db: SQLiteDatabase) {
+    if (db.isReadOnly) return
+    db.beginTransaction()
+    try {
+      createConversationSchema(db)
+      db.setTransactionSuccessful()
+    } finally {
+      db.endTransaction()
+    }
+  }
+
   override suspend fun read(id: String?): Task? = withContext(Dispatchers.IO) {
     val query = if (id == null) "SELECT snapshot FROM tasks ORDER BY sequence DESC LIMIT 1"
     else "SELECT snapshot FROM tasks WHERE id = ?"
