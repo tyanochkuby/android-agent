@@ -23,7 +23,7 @@ type Duration = (typeof durations)[number];
 const historyPage = 20;
 
 // Keep in-flight work and pending writes across component remounts in the same runtime.
-let submission: Promise<void> | null = null;
+let submission: Promise<string | undefined> | null = null;
 const promptSavedListeners = new Set<() => void>();
 let startAttempt: string | null = null;
 let unsaved: { id: string; outcome: Outcome } | null = null;
@@ -113,7 +113,7 @@ export default function App() {
       if (active && !pendingSubmission && unsaved)
         setAnswer(unsavedText(unsaved.outcome));
       if (pendingSubmission) {
-        await pendingSubmission;
+        const failure = await pendingSubmission;
         if (!active) return;
         const [snapshot] = await Promise.all([
           tasks.read().catch(() => undefined),
@@ -121,6 +121,7 @@ export default function App() {
         ]);
         if (active) {
           if (snapshot !== undefined) updateTask(snapshot);
+          if (failure !== undefined) setStatus(failure);
           if (unsaved) setAnswer(unsavedText(unsaved.outcome));
           setPending(false);
         }
@@ -190,11 +191,12 @@ export default function App() {
       const snapshot = await Promise.resolve().then(operation);
       if (snapshot) updateTask(snapshot);
     } catch (error) {
-      setStatus(
+      const failure =
         error instanceof Error
           ? error.message
-          : 'Could not complete the request.',
-      );
+          : 'Could not complete the request.';
+      setStatus(failure);
+      return failure;
     } finally {
       submission = null;
       setPending(false);
