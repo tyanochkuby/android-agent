@@ -40,13 +40,16 @@ export const conversation = {
     const turns = await readTurns(limit, before);
     return Promise.all(
       turns.map(async ({ taskIds, ...turn }) => {
-        const linked = await Promise.all(taskIds.map(id => tasks.read(id).catch(() => null)));
+        const linked = await Promise.all(
+          taskIds.map(id => tasks.read(id).catch(() => null)),
+        );
         return { ...turn, tasks: linked.filter(task => task !== null) };
       }),
     );
   },
   // Saves the prompt as a running turn and returns its ID.
-  start: (prompt: string) => NativeTasks.startTurn(prompt),
+  start: (prompt: string, recoverUnacknowledged: boolean) =>
+    NativeTasks.startTurn(prompt, recoverUnacknowledged),
   // Returns model input from completed turns: the checkpoint, then exact turns after its coverage.
   // Near the budget it first summarizes that input through `model` and switches to the saved summary.
   async context(model: Model, budget = contextBudget): Promise<Message[]> {

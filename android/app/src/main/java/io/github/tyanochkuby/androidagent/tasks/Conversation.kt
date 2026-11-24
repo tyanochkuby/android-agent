@@ -62,8 +62,12 @@ internal fun linkTaskToTurn(db: SQLiteDatabase, turn: String, task: String) {
  * tasks submitted while it ran.
  */
 internal class Conversation(private val database: SQLiteOpenHelper) {
-  suspend fun start(prompt: String): String = write { db ->
+  suspend fun start(prompt: String, recoverUnacknowledged: Boolean): String = write { db ->
     require(prompt.isNotBlank() && prompt.length <= MAX_TEXT) { "Invalid prompt." }
+    if (recoverUnacknowledged) {
+      val values = ContentValues().apply { put("status", TurnStatus.INTERRUPTED.name) }
+      db.update("turns", values, "status = 'RUNNING'", null)
+    }
     check(DatabaseUtils.queryNumEntries(db, "turns", "status = 'RUNNING'") == 0L) { "Finish the current prompt first." }
     val values = ContentValues().apply {
       put("prompt", prompt)

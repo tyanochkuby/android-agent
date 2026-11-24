@@ -30,6 +30,7 @@ export default function App() {
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [connected, setConnected] = useState(false);
+  const [shareHistory, setShareHistory] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
@@ -37,6 +38,7 @@ export default function App() {
   const [earlier, setEarlier] = useState(false);
   const revision = useRef(0);
   const submitting = useRef(false);
+  const unacknowledgedStart = useRef(false);
   // A finished turn whose outcome could not be saved yet. Saved again before the next prompt.
   const unsaved = useRef<{ id: string; outcome: Outcome } | null>(null);
   const states = Object.values(task?.states ?? {});
@@ -154,6 +156,7 @@ export default function App() {
   function connect(signIn: boolean) {
     return handle(async () => {
       setConnected(false);
+      setShareHistory(false);
       const bridge = companion(pairingCode.trim());
       const connection = await (signIn ? bridge.signIn() : bridge.check());
       setConnected(connection.ready);
@@ -187,13 +190,19 @@ export default function App() {
       if (unsaved.current)
         await save(unsaved.current.id, unsaved.current.outcome);
       // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
-      const id = await conversation.start(message).catch(error => {
-        setAnswer(
-          error instanceof Error ? error.message : 'Could not save the prompt.',
-        );
-        return null;
-      });
+      const id = await conversation
+        .start(message, unacknowledgedStart.current && !unsaved.current)
+        .catch(error => {
+          unacknowledgedStart.current = true;
+          setAnswer(
+            error instanceof Error
+              ? error.message
+              : 'Could not save the prompt.',
+          );
+          return null;
+        });
       if (id === null) return;
+      unacknowledgedStart.current = false;
       unsaved.current = null;
       setPrompt('');
       await loadHistory().catch(() => {});
@@ -207,7 +216,7 @@ export default function App() {
             model,
             agentTools(id),
             shareScreen,
-            await conversation.context(model),
+            shareHistory ? await conversation.context(model) : [],
           ),
         };
       } catch (error) {
@@ -258,6 +267,7 @@ export default function App() {
                 onChangeText={value => {
                   setPairingCode(value);
                   setConnected(false);
+                  setShareHistory(false);
                   setAnswer('');
                 }}
               />
@@ -284,6 +294,22 @@ export default function App() {
               {connected && (
                 <>
                   <Text style={styles.presetText}>Using ChatGPT plan</Text>
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityLabel="Share saved conversation"
+                    accessibilityState={{
+                      checked: shareHistory,
+                      disabled: busy,
+                    }}
+                    disabled={busy}
+                    onPress={() => setShareHistory(value => !value)}
+                    style={[styles.preset, shareHistory && styles.selected]}
+                  >
+                    <Text style={styles.presetText}>
+                      {shareHistory ? '☑' : '☐'} Share saved conversation with
+                      this connection
+                    </Text>
+                  </Pressable>
                   <TextInput
                     accessibilityLabel="Agent prompt"
                     placeholder="What should Android do?"
@@ -299,6 +325,7 @@ export default function App() {
                   />
                   <Pressable
                     accessibilityRole="checkbox"
+                    accessibilityLabel="Share screen for this prompt"
                     accessibilityState={{
                       checked: shareScreen,
                       disabled: busy,
@@ -368,9 +395,11 @@ export default function App() {
                               key={`${linked.request.id}-${step.id}`}
                               style={styles.description}
                             >
-                              {`${step.id}: ${linked.states[
-                                step.id
-                              ].phase.toLowerCase()}`}
+                              {`${step.id}: ${(task?.request.id ===
+                              linked.request.id
+                                ? task
+                                : linked
+                              ).states[step.id].phase.toLowerCase()}`}
                             </Text>
                           )),
                         )}

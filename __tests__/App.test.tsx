@@ -120,6 +120,9 @@ async function connectCompanion(model: jest.Mock) {
   await fireEvent.press(
     screen.getByRole('button', { name: 'Check connection' }),
   );
+  await fireEvent.press(
+    screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+  );
   return bridge;
 }
 
@@ -297,20 +300,49 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
       screen.getByLabelText('Agent prompt'),
       'What can you do?',
     );
-    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
-      false,
+    expect(
+      screen.getByRole('checkbox', { name: 'Share screen for this prompt' })
+        .props.accessibilityState.checked,
+    ).toBe(false);
+    await fireEvent.press(
+      screen.getByRole('checkbox', { name: 'Share screen for this prompt' }),
     );
-    await fireEvent.press(screen.getByRole('checkbox'));
     await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
-    expect(screen.getByRole('checkbox').props.accessibilityState.checked).toBe(
-      false,
-    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Share screen for this prompt' })
+        .props.accessibilityState.checked,
+    ).toBe(false);
     expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
     expect(signIn).toHaveBeenCalledTimes(1);
     expect(check).toHaveBeenCalledTimes(1);
     expect(model).toHaveBeenCalledWith(expect.any(String), [
       { role: 'user', content: 'What can you do?' },
       { role: 'user', content: expect.stringContaining('observe_ui') },
+    ]);
+  } finally {
+    bridge.mockRestore();
+  }
+});
+
+test('pairing again keeps history local until sharing is enabled', async () => {
+  const model = jest
+    .fn()
+    .mockResolvedValue('[{"tool":"finish","message":"Saved reply."}]');
+  await render(<App />);
+  const bridge = await connectCompanion(model);
+  try {
+    await ask('Private history');
+    await fireEvent.changeText(
+      screen.getByLabelText('Companion pairing code'),
+      'b'.repeat(32),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Check connection' }),
+    );
+    expect(screen.getByText('Private history')).toBeTruthy();
+    await ask('New prompt');
+    expect(model).toHaveBeenLastCalledWith(expect.any(String), [
+      { role: 'user', content: 'New prompt' },
     ]);
   } finally {
     bridge.mockRestore();
