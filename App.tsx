@@ -22,6 +22,11 @@ const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
 const historyPage = 20;
 
+// Keep in-flight work and pending writes across component remounts in the same runtime.
+let submitting = false;
+let startAttempt: string | null = null;
+let unsaved: { id: string; outcome: Outcome } | null = null;
+
 export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
   const [task, setTask] = useState<Task | null>(null);
@@ -38,10 +43,6 @@ export default function App() {
   const [history, setHistory] = useState<Turn[]>([]);
   const [earlier, setEarlier] = useState(false);
   const revision = useRef(0);
-  const submitting = useRef(false);
-  const startAttempt = useRef<string | null>(null);
-  // A finished turn whose outcome could not be saved yet. Saved again before the next prompt.
-  const unsaved = useRef<{ id: string; outcome: Outcome } | null>(null);
   const states = Object.values(task?.states ?? {});
   const running = states.some(
     ({ phase }) => phase === 'QUEUED' || phase === 'RUNNING',
@@ -109,7 +110,7 @@ export default function App() {
       const version = revision.current;
       try {
         const snapshot = await tasks.read();
-        if (active && !submitting.current && revision.current === version) {
+        if (active && !submitting && revision.current === version) {
           updateTask(snapshot);
         }
       } catch (error) {
@@ -141,8 +142,8 @@ export default function App() {
   }, [running]);
 
   async function handle(operation: () => Promise<Task | void>) {
-    if (submitting.current) return;
-    submitting.current = true;
+    if (submitting) return;
+    submitting = true;
     revision.current++;
     setPending(true);
     setStatus('');
@@ -157,7 +158,7 @@ export default function App() {
           : 'Could not complete the request.',
       );
     } finally {
-      submitting.current = false;
+      submitting = false;
       setPending(false);
     }
   }
@@ -194,10 +195,10 @@ export default function App() {
   async function save(id: string, outcome: Outcome) {
     try {
       await conversation.finish(id, outcome);
-      unsaved.current = null;
+      unsaved = null;
       return true;
     } catch {
-      unsaved.current = { id, outcome };
+      unsaved = { id, outcome };
       return false;
     }
   }
@@ -207,10 +208,9 @@ export default function App() {
       setAnswer('');
       setShareScreen(false);
       const message = prompt.trim();
-      if (unsaved.current)
-        await save(unsaved.current.id, unsaved.current.outcome);
+      if (unsaved) await save(unsaved.id, unsaved.outcome);
       // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
-      const attempt = (startAttempt.current ??= `${Date.now()}-${Math.random()
+      const attempt = (startAttempt ??= `${Date.now()}-${Math.random()
         .toString(36)
         .slice(2)}`);
       const id = await conversation.start(message, attempt).catch(error => {
@@ -220,8 +220,8 @@ export default function App() {
         return null;
       });
       if (id === null) return;
-      startAttempt.current = null;
-      unsaved.current = null;
+      startAttempt = null;
+      unsaved = null;
       setPrompt('');
       await loadHistory().catch(() => {});
 

@@ -407,43 +407,43 @@ test('saves the prompt before inference and sends completed turns with a follow-
 test.each([
   ['is rejected', false],
   ['lands without an acknowledgement', true],
-])(
-  'saves a reply again before the next prompt when its save %s',
-  async (_, lands) => {
-    const replies = ['First reply.', 'Second reply.'];
-    const model = jest.fn(async () =>
-      JSON.stringify([{ tool: 'finish', message: replies.shift() }]),
-    );
-    const complete = jest.mocked(NativeTasks.completeTurn);
-    complete.mockClear();
-    const save = complete.getMockImplementation()!;
-    complete.mockImplementationOnce(async (id, reply) => {
-      if (lands) await save(id, reply);
-      throw new Error('Storage busy.');
-    });
+])('saves a reply again after remount when its save %s', async (_, lands) => {
+  const replies = ['First reply.', 'Second reply.'];
+  const model = jest.fn(async () =>
+    JSON.stringify([{ tool: 'finish', message: replies.shift() }]),
+  );
+  const complete = jest.mocked(NativeTasks.completeTurn);
+  complete.mockClear();
+  const save = complete.getMockImplementation()!;
+  complete.mockImplementationOnce(async (id, reply) => {
+    if (lands) await save(id, reply);
+    throw new Error('Storage busy.');
+  });
 
+  const mounted = await render(<App />);
+  const bridge = await connectCompanion(model);
+  try {
+    await ask('First prompt');
+    expect(screen.getByText(/Could not save this result/)).toBeTruthy();
+    await mounted.unmount();
     await render(<App />);
-    const bridge = await connectCompanion(model);
-    try {
-      await ask('First prompt');
-      expect(screen.getByText(/Could not save this result/)).toBeTruthy();
-      await ask('Second prompt');
-    } finally {
-      bridge.mockRestore();
-    }
+    await connectCompanion(model);
+    await ask('Second prompt');
+  } finally {
+    bridge.mockRestore();
+  }
 
-    expect(complete.mock.calls).toEqual([
-      ['1', 'First reply.'],
-      ['1', 'First reply.'],
-      ['2', 'Second reply.'],
-    ]);
-    expect(turns.map(({ status, reply }) => [status, reply])).toEqual([
-      ['COMPLETED', 'First reply.'],
-      ['COMPLETED', 'Second reply.'],
-    ]);
-    expect(model).toHaveBeenCalledTimes(2);
-  },
-);
+  expect(complete.mock.calls).toEqual([
+    ['1', 'First reply.'],
+    ['1', 'First reply.'],
+    ['2', 'Second reply.'],
+  ]);
+  expect(turns.map(({ status, reply }) => [status, reply])).toEqual([
+    ['COMPLETED', 'First reply.'],
+    ['COMPLETED', 'Second reply.'],
+  ]);
+  expect(model).toHaveBeenCalledTimes(2);
+});
 
 test('records a failed turn and links tasks submitted for it', async () => {
   const timer = {
