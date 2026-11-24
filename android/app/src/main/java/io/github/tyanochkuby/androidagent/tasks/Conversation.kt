@@ -5,6 +5,7 @@ import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
@@ -181,7 +182,11 @@ internal class Conversation(private val database: SQLiteOpenHelper) {
     val db = database.writableDatabase
     db.beginTransaction()
     try {
-      block(db).also { db.setTransactionSuccessful() }
+      ensureActive()
+      block(db).also {
+        ensureActive()
+        db.setTransactionSuccessful()
+      }
     } finally {
       db.endTransaction()
     }

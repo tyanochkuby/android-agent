@@ -32,7 +32,7 @@ export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState(submission !== null);
+  const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [sessionId, setSessionId] = useState<string>();
@@ -107,7 +107,10 @@ export default function App() {
       }
     }
 
-    if (pendingSubmission) promptSavedListeners.add(refreshHistory);
+    if (pendingSubmission) {
+      setPending(true);
+      promptSavedListeners.add(refreshHistory);
+    }
     (async () => {
       await refreshHistory();
       if (active && !pendingSubmission && unsaved)
