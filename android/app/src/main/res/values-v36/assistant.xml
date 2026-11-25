@@ -1,0 +1,3 @@
+<resources>
+    <bool name="assistant_prototype_enabled">true</bool>
+</resources>

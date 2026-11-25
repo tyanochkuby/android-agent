@@ -27,5 +27,24 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      <service
+        android:name=".assistant.AssistantService"
+        android:enabled="@bool/assistant_prototype_enabled"
+        android:exported="true"
+        android:permission="android.permission.BIND_VOICE_INTERACTION">
+        <intent-filter>
+          <action android:name="android.service.voice.VoiceInteractionService" />
+        </intent-filter>
+        <meta-data
+          android:name="android.voice_interaction"
+          android:resource="@xml/assistant" />
+      </service>
+      <service
+        android:name=".assistant.AssistantSessionService"
+        android:exported="true"
+        android:permission="android.permission.BIND_VOICE_INTERACTION" />
+      <service
+        android:name=".assistant.AssistantRecognizer"
+        android:exported="false" />
     </application>
 </manifest>
