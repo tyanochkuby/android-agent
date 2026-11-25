@@ -9,11 +9,11 @@ type Connection = {
   error?: string;
 };
 
-// `onUsage` receives the input tokens the provider reported for a request, when it reports them.
+// `onUsage` receives the input token count for each request, or undefined when unavailable.
 export function companion(
   pairingCode: string,
   sessionId?: string,
-  onUsage?: (inputTokens: number) => void,
+  onUsage?: (inputTokens: number | undefined) => void,
 ) {
   async function request<T>(
     path: string,
@@ -56,7 +56,7 @@ export function companion(
         { sessionId, instructions, input, liveOnly },
         signal,
       );
-      if (typeof result.inputTokens === 'number') onUsage?.(result.inputTokens);
+      onUsage?.(result.inputTokens);
       return result.text;
     };
   }

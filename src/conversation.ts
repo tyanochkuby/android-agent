@@ -71,8 +71,8 @@ export const conversation = {
     return prefix(checkpoint, turns);
   },
   // Summarizes the same input a following prompt would send and saves it as the checkpoint.
-  // Nothing is saved once `signal` aborts, so a result that arrives after a new prompt, a session
-  // change or withdrawn sharing is dropped. Resolves whether a checkpoint was saved.
+  // Drops results that arrive after cancellation. Once submitted, the local checkpoint write
+  // can finish independently. Resolves whether a checkpoint was saved.
   async compactIdle(model: Model, budget: ContextBudget, signal: AbortSignal) {
     const saved = await NativeTasks.readCheckpoint();
     const checkpoint: Checkpoint | null =

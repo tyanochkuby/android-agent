@@ -249,6 +249,7 @@ export default function App() {
 
   function connect(signIn: boolean) {
     return handle(async () => {
+      compactor.report(undefined);
       setSession(undefined);
       setShareHistory(false);
       const bridge = companion(pairingCode.trim());
@@ -291,6 +292,7 @@ export default function App() {
 
   function askAgent() {
     return handle(async () => {
+      compactor.report(undefined);
       setAnswer('');
       setShareScreen(false);
       const message = prompt.trim();
@@ -331,6 +333,7 @@ export default function App() {
           ),
         };
       } catch (error) {
+        compactor.report(undefined);
         setSession(undefined);
         outcome = {
           failure:
@@ -372,6 +375,8 @@ export default function App() {
                 editable={!busy}
                 value={pairingCode}
                 onChangeText={value => {
+                  compactor.stop();
+                  compactor.report(undefined);
                   setPairingCode(value);
                   setSession(undefined);
                   setShareHistory(false);

@@ -51,6 +51,7 @@ let signInError;
 let model;
 let sessionId = randomBytes(16).toString('hex');
 let activeInferences = 0;
+let promptRevision = 0;
 
 // Picks the first eligible model once per sign-in. `contextWindow` is null when the catalog
 // does not state one.
@@ -125,8 +126,12 @@ async function infer(request, signal) {
     }
   };
   assertSession();
+  const revision = promptRevision;
   // Sign-in cancels a live-only request instead of waiting for it.
-  if (!liveOnly) activeInferences++;
+  if (!liveOnly) {
+    activeInferences++;
+    promptRevision++;
+  }
   try {
     if (!(await chatgpt.getSession()).sharing) {
       throw new Error('Sign in with ChatGPT and allow plan usage first.');
@@ -134,6 +139,10 @@ async function infer(request, signal) {
     const { slug } = await selectModel(signal);
     // A sign-in during the awaits above must not receive history sent under the old session.
     assertSession();
+    signal.throwIfAborted();
+    if (liveOnly && (activeInferences || revision !== promptRevision)) {
+      throw new Error('A prompt took priority over idle compaction.');
+    }
     const result = await route.respond(
       { model: slug, instructions, input },
       { signal, liveOnly },

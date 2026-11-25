@@ -12,6 +12,7 @@ export const idleDelayMs = 120_000;
 // A run that finishes or fails consumes the report. An aborted run keeps it for the next `start`.
 export function idleCompactor() {
   let inputTokens: number | undefined;
+  let reportRevision = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: AbortController | undefined;
 
@@ -23,13 +24,15 @@ export function idleCompactor() {
   }
 
   return {
-    report(tokens: number) {
+    report(tokens: number | undefined) {
       inputTokens = tokens;
+      reportRevision++;
     },
     start(compact: (signal: AbortSignal) => Promise<unknown>) {
       stop();
       const tokens = inputTokens;
       if (tokens === undefined || tokens <= idleCompactionTokens) return;
+      const revision = reportRevision;
       timer = setTimeout(() => {
         timer = undefined;
         inputTokens = undefined;
@@ -39,7 +42,8 @@ export function idleCompactor() {
           .catch(() => {})
           .finally(() => {
             if (running === controller) running = undefined;
-            if (controller.signal.aborted) inputTokens ??= tokens;
+            if (controller.signal.aborted && revision === reportRevision)
+              inputTokens ??= tokens;
           });
       }, idleDelayMs);
     },

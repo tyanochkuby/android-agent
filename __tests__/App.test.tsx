@@ -572,8 +572,8 @@ describe('idle compaction', () => {
     AppState.currentState = mockedState;
   });
 
-  // Every prompt request reports `inputTokens`; idle summaries wait until the test replies.
-  async function connect(inputTokens: number) {
+  // Idle summaries wait until the test replies.
+  async function connect(...usage: (number | undefined)[]) {
     const bridge = jest.spyOn(companionModule, 'companion');
     bridge.mockImplementation((_, __, onUsage) => ({
       signIn: jest.fn(),
@@ -581,7 +581,7 @@ describe('idle compaction', () => {
         .fn()
         .mockResolvedValue({ ready: true, sessionId: 'test-session' }),
       model: async () => {
-        onUsage?.(inputTokens);
+        onUsage?.(usage.length > 1 ? usage.shift() : usage[0]);
         return '[{"tool":"finish","message":"Done."}]';
       },
       liveModel: (signal: AbortSignal) => (_instructions, input) =>
@@ -649,9 +649,9 @@ describe('idle compaction', () => {
     }
   });
 
-  test('a new prompt cancels the summary and its late result is not saved', async () => {
+  test('a new prompt with unknown usage cancels the summary without rearming it', async () => {
     await render(<App />);
-    const bridge = await connect(250_000);
+    const bridge = await connect(250_000, undefined);
     try {
       await ask('First prompt.');
       await idle();
@@ -660,6 +660,8 @@ describe('idle compaction', () => {
       expect(summaries[0].signal.aborted).toBe(true);
       await act(async () => summaries[0].reply('Stale summary.'));
       expect(NativeTasks.saveCheckpoint).not.toHaveBeenCalled();
+      await idle();
+      expect(summaries).toHaveLength(1);
       expect(turns.map(turn => turn.status)).toEqual([
         'COMPLETED',
         'COMPLETED',
