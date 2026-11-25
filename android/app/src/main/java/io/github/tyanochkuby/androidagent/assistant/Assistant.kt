@@ -19,7 +19,14 @@ import android.view.WindowManager.LayoutParams
 import android.widget.FrameLayout
 
 /** Makes Android Agent eligible for the default digital assistant role. */
-class AssistantService : VoiceInteractionService()
+class AssistantService : VoiceInteractionService() {
+  override fun onReady() {
+    super.onReady()
+    setDisabledShowContext(
+      VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT,
+    )
+  }
+}
 
 /** Android requires a recognizer before granting the assistant role. It declines every request until speech is designed. */
 class AssistantRecognizer : RecognitionService() {
