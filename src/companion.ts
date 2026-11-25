@@ -24,6 +24,10 @@ export function companion(
     // React Native fetch uses JS timers to deliver replies. Direct XHR
     // callbacks continue while the target app owns the foreground.
     const response = await new Promise<XMLHttpRequest>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error('The request was cancelled.'));
+        return;
+      }
       const xhr = new XMLHttpRequest();
       xhr.open(method, `http://127.0.0.1:8765${path}`);
       xhr.timeout = 60_000;
@@ -37,7 +41,6 @@ export function companion(
       xhr.ontimeout = () => reject(new Error('The companion did not reply.'));
       xhr.onabort = () => reject(new Error('The request was cancelled.'));
       signal?.addEventListener('abort', () => xhr.abort());
-      if (signal?.aborted) return xhr.abort();
       xhr.send(body === undefined ? null : JSON.stringify(body));
     });
     if (response.status === 403)

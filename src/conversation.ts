@@ -77,8 +77,13 @@ export const conversation = {
     const saved = await NativeTasks.readCheckpoint();
     const checkpoint: Checkpoint | null =
       saved === null ? null : JSON.parse(saved);
-    const { turns } = await uncovered(checkpoint, budget.historyTokens, budget);
-    if (signal.aborted) return false;
+    const { turns, complete } = await uncovered(
+      checkpoint,
+      budget.historyTokens,
+      budget,
+    );
+    // The foreground fallback uses the newest turns. An oldest-first batch would miss its prefix.
+    if (!complete || signal.aborted) return false;
     return (await compact(model, checkpoint, turns, budget, signal)) !== null;
   },
   // Saves the outcome of a running turn. Retrying after a rejected or unacknowledged save is safe:

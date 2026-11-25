@@ -14,12 +14,15 @@ export function idleCompactor() {
   let inputTokens: number | undefined;
   let reportRevision = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let running: AbortController | undefined;
+  let running:
+    | { controller: AbortController; tokens: number; revision: number }
+    | undefined;
 
   function stop() {
     clearTimeout(timer);
     timer = undefined;
-    running?.abort();
+    if (running?.revision === reportRevision) inputTokens = running.tokens;
+    running?.controller.abort();
     running = undefined;
   }
 
@@ -37,13 +40,11 @@ export function idleCompactor() {
         timer = undefined;
         inputTokens = undefined;
         const controller = new AbortController();
-        running = controller;
+        running = { controller, tokens, revision };
         compact(controller.signal)
           .catch(() => {})
           .finally(() => {
-            if (running === controller) running = undefined;
-            if (controller.signal.aborted && revision === reportRevision)
-              inputTokens ??= tokens;
+            if (running?.controller === controller) running = undefined;
           });
       }, idleDelayMs);
     },

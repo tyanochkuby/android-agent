@@ -210,6 +210,16 @@ test('past the hard limit without a summary, sends the newest turns that fit', a
   expect(requestSize(input).tokens).toBeLessThanOrEqual(budget.historyTokens);
   expect(input[input.length - 1].content).toBe('Reply 30');
   expect(input[0].content).not.toBe(turns[0].prompt);
+
+  const idleModel = summarize();
+  expect(
+    await conversation.compactIdle(
+      idleModel,
+      budget,
+      new AbortController().signal,
+    ),
+  ).toBe(false);
+  expect(idleModel).not.toHaveBeenCalled();
 });
 
 test('the HTTP payload bound limits history apart from the token budget', async () => {

@@ -29,7 +29,7 @@ test('runs once, two minutes after it starts, only above 200,000 input tokens', 
   expect(compact).toHaveBeenCalledTimes(1);
 
   runs[0].settle();
-  await Promise.resolve();
+  await jest.advanceTimersByTimeAsync(0);
   // The run consumed the report, so idling again does not repeat it.
   compactor.start(compact);
   jest.advanceTimersByTime(idleDelayMs);
@@ -66,11 +66,11 @@ test('activity restarts the idle period and stop aborts a running compaction', a
   compactor.stop();
   expect(runs[0].signal.aborted).toBe(true);
 
-  // An aborted run keeps its report for the next idle period.
+  // Resume while the cancelled request is still settling.
+  compactor.start(compact);
   runs[0].settle();
   await Promise.resolve();
   await Promise.resolve();
-  compactor.start(compact);
   jest.advanceTimersByTime(idleDelayMs);
   expect(compact).toHaveBeenCalledTimes(2);
 });
