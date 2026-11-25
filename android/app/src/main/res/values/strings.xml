@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Android Agent</string>
+    <string name="dismiss_assistant_dot">Dismiss Android Agent</string>
 </resources>
