@@ -49,7 +49,7 @@ class AssistantSession(service: VoiceInteractionSessionService) : VoiceInteracti
     window.clearFlags(LayoutParams.FLAG_DIM_BEHIND or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_INSET_DECOR)
     window.addFlags(LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_NOT_TOUCHABLE or LayoutParams.FLAG_NOT_TOUCH_MODAL)
     window.setLayout(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
-    window.setGravity(Gravity.BOTTOM or Gravity.END)
+    window.setGravity(Gravity.BOTTOM or Gravity.RIGHT)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       window.attributes = window.attributes.apply { fitInsetsTypes = WindowInsets.Type.systemBars() or WindowInsets.Type.ime() }
     }
