@@ -1,0 +1,161 @@
+diff --git a/packages/local/src/index.ts b/packages/local/src/index.ts
+index 24301e6..5b513f8 100644
+--- a/packages/local/src/index.ts
++++ b/packages/local/src/index.ts
+@@ -5,6 +5,7 @@ import { asError, ChatGPTError, requiresReauthentication } from "./errors.js";
+ import { listModels } from "./models.js";
+ import { authorize, identityVerificationUnavailable, refreshConnection, revokeConnection } from "./oauth.js";
+ import { streamResponse } from "./responses.js";
++import { openResponsesSocket } from "./responsesSocket.js";
+ import { ConnectionStore } from "./storage.js";
+ import type { ChatGPTClient, ChatGPTConfig, LoginProfile, PendingRegistration, SessionState, StoredConnection, StoredProfile, StoredState } from "./types.js";
+
+@@ -72,6 +73,7 @@ export function createChatGPT(config: ChatGPTConfig): ChatGPTClient {
+   const store = new ConnectionStore(config.storageDir ?? join(homedir(), ".config", config.appId), config.credentialEncryption);
+   const subscribers = new Set<(state: SessionState) => void>();
+   const requests = new Set<AbortController>();
++  const sockets = new Set<WebSocket>();
+   let state: SessionState = { status: "disconnected", sharing: false };
+   let pendingSignIn: AbortController | undefined;
+   let changingProfile = false;
+@@ -85,7 +87,13 @@ export function createChatGPT(config: ChatGPTConfig): ChatGPTClient {
+     return snapshot();
+   };
+   const read = () => store.withLock(async () => (await store.read()) ?? emptyState());
+-  const cancelRequests = () => { epoch++; for (const request of requests) request.abort(); };
++  const cancelRequests = () => {
++    epoch++;
++    for (const request of requests) request.abort();
++    // A connection change also ends sockets opened with the previous credentials.
++    for (const socket of sockets) socket.close();
++    sockets.clear();
++  };
+   const assertIdle = () => {
+     if (pendingSignIn || changingProfile) throw new ChatGPTError("connection_busy", "Finish the connection change before continuing.");
+   };
+@@ -332,5 +340,12 @@ export function createChatGPT(config: ChatGPTConfig): ChatGPTClient {
+       if (!options.model.trim()) throw new ChatGPTError("invalid_request", "Choose a model before starting a request.");
+       return authenticated((accessToken, signal) => streamResponse(accessToken, options, signal), options.signal);
+     },
++
++    async openResponsesSocket(options = {}) {
++      const socket = await authenticated(openResponsesSocket, options.signal);
++      sockets.add(socket);
++      socket.addEventListener("close", () => sockets.delete(socket));
++      return socket;
++    },
+   };
+ }
+diff --git a/packages/local/src/responsesSocket.ts b/packages/local/src/responsesSocket.ts
+new file mode 100644
+index 0000000..eaf3b53
+--- /dev/null
++++ b/packages/local/src/responsesSocket.ts
+@@ -0,0 +1,38 @@
++import { ChatGPTError } from "./errors.js";
++
++const responsesSocketUrl = "wss://api.openai.com/v1/responses";
++
++// Node's WebSocket accepts handshake headers; the DOM constructor type does not declare them.
++type HeaderWebSocket = new (url: string, init: { headers: Record<string, string> }) => WebSocket;
++
++/** Opens a Responses WebSocket authorized with `accessToken` and resolves once it is open. */
++export function openResponsesSocket(accessToken: string, signal: AbortSignal): Promise<WebSocket> {
++  signal.throwIfAborted();
++  const socket = new (WebSocket as unknown as HeaderWebSocket)(responsesSocketUrl, {
++    headers: { authorization: `Bearer ${accessToken}` },
++  });
++  return new Promise((resolve, reject) => {
++    const cleanup = () => {
++      socket.removeEventListener("open", opened);
++      socket.removeEventListener("error", failed);
++      socket.removeEventListener("close", failed);
++      signal.removeEventListener("abort", failed);
++    };
++    const opened = () => {
++      cleanup();
++      resolve(socket);
++    };
++    // Handshake failures carry no safe detail; the HTTP status is not exposed to WebSocket clients.
++    function failed() {
++      cleanup();
++      socket.close();
++      reject(signal.aborted
++        ? new ChatGPTError("cancelled", "The request was cancelled.")
++        : new ChatGPTError("socket_failed", "Could not open the Responses connection.", true));
++    }
++    socket.addEventListener("open", opened);
++    socket.addEventListener("error", failed);
++    socket.addEventListener("close", failed);
++    signal.addEventListener("abort", failed);
++  });
++}
+diff --git a/packages/local/src/types.ts b/packages/local/src/types.ts
+index e80f3d2..6526387 100644
+--- a/packages/local/src/types.ts
++++ b/packages/local/src/types.ts
+@@ -101,6 +101,12 @@ export interface ChatGPTClient {
+   /** Sign out of the selected profile. Its registration and identity remain saved. */
+   disconnect(): Promise<void>;
+   streamResponse(options: StreamResponseOptions): Promise<{ text: string }>;
++  /**
++   * Opens a Responses API WebSocket for the selected profile, refreshing credentials first when needed.
++   * The access token is sent only in the handshake. Signing in, switching profiles or disconnecting
++   * closes the socket; open a new one afterwards.
++   */
++  openResponsesSocket(options?: { signal?: AbortSignal }): Promise<WebSocket>;
+ }
+
+ export interface StoredCredentials {
+diff --git a/packages/local/test/refresh.test.mjs b/packages/local/test/refresh.test.mjs
+index fcf0eee..5763abf 100644
+--- a/packages/local/test/refresh.test.mjs
++++ b/packages/local/test/refresh.test.mjs
+@@ -280,3 +280,47 @@ test('pending rotations reject invalid or future receipt timestamps before persi
+     assert.equal(await readFile(filename, 'utf8'), before);
+   }
+ });
++
++test('a Responses socket opens with refreshed credentials and closes on disconnect', async (t) => {
++  const { client } = await fixture(t);
++  const calls = mockProvider(t, {
++    token: () => Response.json(tokenResponse()),
++    revoke: () => new Response(null, { status: 200 }),
++  });
++  const opened = [];
++  class FakeSocket extends EventTarget {
++    constructor(url, init) {
++      super();
++      opened.push({ url, authorization: init.headers.authorization });
++      this.readyState = 0;
++      queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); });
++    }
++    close() {
++      if (this.readyState === 3) return;
++      this.readyState = 3;
++      this.dispatchEvent(new Event('close'));
++    }
++  }
++  t.mock.property(globalThis, 'WebSocket', FakeSocket);
++  const socket = await client.openResponsesSocket();
++  assert.equal(socket.readyState, 1);
++  assert.deepEqual(opened, [{ url: 'wss://api.openai.com/v1/responses', authorization: 'Bearer successor-test-access' }]);
++  assert.equal(calls.token, 1);
++  await client.disconnect();
++  assert.equal(socket.readyState, 3);
++});
++
++test('a failed Responses socket handshake reports no credentials', async (t) => {
++  const { client } = await fixture(t);
++  mockProvider(t, { token: () => Response.json(tokenResponse()) });
++  class RefusedSocket extends EventTarget {
++    constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event('error'))); }
++    close() {}
++  }
++  t.mock.property(globalThis, 'WebSocket', RefusedSocket);
++  await assert.rejects(client.openResponsesSocket(), (error) => {
++    assert.equal(error.code, 'socket_failed');
++    assert.doesNotMatch(JSON.stringify(error), /test-access/);
++    return true;
++  });
++});

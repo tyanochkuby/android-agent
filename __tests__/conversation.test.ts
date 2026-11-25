@@ -46,12 +46,13 @@ const summarize = (summary = 'Earlier: user owns a dog named Rex.') =>
       : JSON.stringify([{ tool: 'finish', message: 'unused' }]),
   );
 
-// Each stored turn adds roughly 280 characters to the request.
-const base = requestSize([]);
+// Each stored turn adds roughly 95 estimated tokens to the request.
+const base = requestSize([]).tokens;
 const budget = {
-  requestLimit: base + 5_000,
-  headroom: 2_000,
-  compactAt: base + 2_000,
+  requestTokens: base + 1_700,
+  historyTokens: base + 1_000,
+  compactAt: base + 700,
+  payloadBytes: Infinity,
 };
 
 beforeEach(() => {
@@ -193,8 +194,8 @@ test('skips summarizing when the summary request itself is over the limit', asyn
   const model = summarize();
   const input = await conversation.context(model, {
     ...budget,
-    requestLimit: budget.compactAt,
-    headroom: -budget.requestLimit,
+    requestTokens: budget.compactAt,
+    historyTokens: Infinity,
   });
 
   expect(model).not.toHaveBeenCalled();
@@ -206,11 +207,35 @@ test('past the hard limit without a summary, sends the newest turns that fit', a
   add(30);
   const input = await conversation.context(model, budget);
 
-  expect(requestSize(input)).toBeLessThanOrEqual(
-    budget.requestLimit - budget.headroom,
-  );
+  expect(requestSize(input).tokens).toBeLessThanOrEqual(budget.historyTokens);
   expect(input[input.length - 1].content).toBe('Reply 30');
   expect(input[0].content).not.toBe(turns[0].prompt);
+
+  const idleModel = summarize();
+  expect(
+    await conversation.compactIdle(
+      idleModel,
+      budget,
+      new AbortController().signal,
+    ),
+  ).toBe(false);
+  expect(idleModel).not.toHaveBeenCalled();
+});
+
+test('the HTTP payload bound limits history apart from the token budget', async () => {
+  const model = jest.fn().mockRejectedValue(new Error('offline'));
+  add(30);
+  const payloadBytes = requestSize([]).bytes + 2_000;
+  const input = await conversation.context(model, {
+    requestTokens: Infinity,
+    historyTokens: Infinity,
+    compactAt: Infinity,
+    payloadBytes,
+  });
+
+  expect(requestSize(input).bytes).toBeLessThanOrEqual(payloadBytes);
+  expect(input[input.length - 1].content).toBe('Reply 30');
+  expect(input.length).toBeLessThan(60);
 });
 
 test('context starts from a stored checkpoint without summarizing again', async () => {
@@ -246,7 +271,7 @@ test('successive model calls reuse the previous request as a prefix, across comp
   // Stands in for App: save the prompt, build context, run, save the reply.
   async function ask(prompt: string) {
     const input = await conversation.context(model, budget);
-    const reply = await runAgent(prompt, model, tools, false, input);
+    const reply = await runAgent(prompt, model, tools, false, input, budget);
     turns.push({
       id: String(turns.length + 1),
       prompt,
@@ -265,7 +290,7 @@ test('successive model calls reuse the previous request as a prefix, across comp
   expect(summary).toBeGreaterThan(0);
   // Every request extends the previous one, including the summary request, except the first after compaction.
   calls.forEach((input, i) => {
-    expect(requestSize(input)).toBeLessThanOrEqual(budget.requestLimit);
+    expect(requestSize(input).tokens).toBeLessThanOrEqual(budget.requestTokens);
     if (i === 0 || i === summary + 1) return;
     expect(input.slice(0, calls[i - 1].length)).toEqual(calls[i - 1]);
   });
@@ -276,4 +301,62 @@ test('successive model calls reuse the previous request as a prefix, across comp
     },
     { role: 'user', content: expect.stringMatching(/^Prompt \d+ /) },
   ]);
+});
+
+test('idle compaction summarizes the input the next prompt would send and saves it', async () => {
+  const model = summarize();
+  checkpoints = [{ summary: 'Earlier summary.', covers: '2' }];
+  add(6);
+  const before = await conversation.context(model, budget);
+  const saved = await conversation.compactIdle(
+    model,
+    budget,
+    new AbortController().signal,
+  );
+
+  expect(saved).toBe(true);
+  const request = model.mock.calls[0][1];
+  expect(request.slice(0, -1)).toEqual(before);
+  expect(request[request.length - 1].content).toMatch(/^Summarize/);
+  expect(checkpoints[checkpoints.length - 1]).toEqual({
+    summary: 'Earlier: user owns a dog named Rex.',
+    covers: '6',
+  });
+  // The next prompt starts from the idle checkpoint without summarizing again.
+  expect(await conversation.context(model, budget)).toEqual([
+    {
+      role: 'user',
+      content:
+        'Summary of earlier conversation turns:\nEarlier: user owns a dog named Rex.',
+    },
+  ]);
+  expect(model).toHaveBeenCalledTimes(1);
+});
+
+test('an idle summary that arrives after its signal aborts is not saved', async () => {
+  add(4);
+  const controller = new AbortController();
+  const model = jest.fn(async () => {
+    controller.abort();
+    return JSON.stringify([{ tool: 'finish', message: 'Stale summary.' }]);
+  });
+
+  expect(await conversation.compactIdle(model, budget, controller.signal)).toBe(
+    false,
+  );
+  expect(NativeTasks.saveCheckpoint).not.toHaveBeenCalled();
+});
+
+test('a failed idle summary keeps the previous checkpoint and context', async () => {
+  checkpoints = [{ summary: 'Earlier summary.', covers: '2' }];
+  add(4);
+  const model = jest.fn().mockRejectedValue(new Error('No live connection.'));
+
+  expect(
+    await conversation.compactIdle(model, budget, new AbortController().signal),
+  ).toBe(false);
+  expect(NativeTasks.saveCheckpoint).not.toHaveBeenCalled();
+  expect(await conversation.context(summarize(), budget)).toEqual(
+    prefixOf('Earlier summary.', 2),
+  );
 });

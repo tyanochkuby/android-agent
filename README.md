@@ -31,14 +31,15 @@ If the app loads but Fast Refresh disconnects on the emulator, run `adb reverse 
 
 ## Prompt runner
 
-The debug app sends prompts to ChatGPT through a Node.js companion on your computer, connected over USB. The companion signs in with OpenAI's open-source [Sign in with ChatGPT DevKit](https://developers.openai.com/siwc/token-sharing-open-source) and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on your ChatGPT plan. It uses the first model in the account's eligible catalog. The phone receives model replies and runs the tools itself. OAuth credentials live only in the companion's memory, so you sign in again after restarting it.
+The debug app sends prompts to ChatGPT through a Node.js companion on your computer, connected over USB. The companion signs in with OpenAI's open-source [Sign in with ChatGPT DevKit](https://developers.openai.com/siwc/token-sharing-open-source) and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on your ChatGPT plan. It uses the first model in the account's eligible catalog. The phone receives model replies and runs the tools itself. On macOS the companion saves the ChatGPT session locally, encrypted with a key in Keychain. Other platforms keep sign-in in memory for the lifetime of the companion.
 
-Build the DevKit in a separate checkout. It has its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE).
+Build the DevKit in a separate checkout. It has its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE). The patch from this repository adds one method, `openResponsesSocket`, which opens an authenticated Responses WebSocket while the DevKit keeps refreshing and storing the credentials. The companion reuses that socket so the provider can serve the conversation prefix from cache and report token usage. Without the patch the companion falls back to HTTP, reports no usage and never compacts idle conversations.
 
 ```sh
 git clone https://github.com/openai/sign-in-with-chatgpt-devkit.git
 cd sign-in-with-chatgpt-devkit
 git checkout 0a36fefeb913055c8c7a1a29b63d82b96b2e841a
+git apply /path/to/android-agent/companion/devkit-responses-socket.patch
 npm ci --ignore-scripts
 npm run build -w @siwc/local
 ```
@@ -50,9 +51,9 @@ node companion/server.mjs /path/to/sign-in-with-chatgpt-devkit
 adb reverse tcp:8765 tcp:8765
 ```
 
-Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page as soon as the companion starts.
+Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page at startup if there is no saved session with plan usage enabled.
 
-1. In **Ask Android Agent**, enter the pairing code the companion printed and tap **Sign in with ChatGPT**. Approve plan usage in the computer's browser, then tap **Check connection**.
+1. In **Ask Android Agent**, enter the pairing code the companion printed and tap **Check connection**. If sign-in is needed, tap **Sign in with ChatGPT**, approve plan usage in the browser, then check the connection again. After a companion restart on macOS, enter the new pairing code and check the connection to use the saved session.
 2. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
 3. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
 

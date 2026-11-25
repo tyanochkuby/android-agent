@@ -22,6 +22,7 @@ jobs:
       - run: npm ci
         id: install
       - run: npm test -- --runInBand
+      - run: npm run test:companion
       - name: React Doctor
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npx --yes react-doctor@0.9.23 --no-telemetry --blocking none
