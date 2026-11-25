@@ -1,12 +1,18 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { chatgptSession } from './chatgptSession.mjs';
+import { catalogFetch } from './modelCatalog.mjs';
+import { modelRoute } from './modelRoute.mjs';
+import { openaiSocket } from './openaiSocket.mjs';
 import { responsesFetch } from './responsesFetch.mjs';
 
-globalThis.fetch = responsesFetch(globalThis.fetch);
+const contextWindows = new Map();
+globalThis.fetch = catalogFetch(
+  responsesFetch(globalThis.fetch),
+  contextWindows,
+);
 
 const devkit = process.argv[2];
 if (!devkit) {
@@ -18,37 +24,23 @@ if (!devkit) {
 const { createChatGPT } = await import(
   pathToFileURL(resolve(devkit, 'packages/local/dist/index.js')).href
 );
-const storageDir = await mkdtemp(join(tmpdir(), 'android-agent-chatgpt-'));
-
-// The SDK gets opaque handles to process-local credentials, so its temporary
-// storage cannot restore a ChatGPT session after the companion exits.
-const credentials = new Map();
-const chatgpt = createChatGPT({
-  appName: 'Android Agent',
-  appId: 'io.github.tyanochkuby.androidagent',
-  storageDir,
-  redirectPort: 0,
-  sendHostId: true,
-  credentialEncryption: {
-    id: 'process-memory',
-    isAvailable: () => true,
-    encrypt(plaintext) {
-      const handle = randomBytes(32).toString('hex');
-      credentials.set(handle, plaintext);
-      return Buffer.from(handle);
-    },
-    decrypt(ciphertext) {
-      const current = Buffer.from(ciphertext).toString();
-      const plaintext = credentials.get(current);
-      if (plaintext === undefined) throw new Error('Restart ChatGPT sign-in.');
-      // The SDK reads the committed handle under its storage lock.
-      // Older handles can be discarded once that read succeeds.
-      for (const handle of credentials.keys()) {
-        if (handle !== current) credentials.delete(handle);
-      }
-      return plaintext;
-    },
-  },
+const sessionStore = await chatgptSession();
+const chatgpt = createChatGPT(sessionStore.config);
+// A DevKit built with `devkit-responses-socket.patch` opens authenticated Responses sockets and
+// owns their credentials. Without it every request uses the DevKit's HTTP stream, which reports no
+// usage, so idle compaction never runs.
+const live =
+  typeof chatgpt.openResponsesSocket === 'function'
+    ? openaiSocket({ open: signal => chatgpt.openResponsesSocket({ signal }) })
+    : undefined;
+if (!live) {
+  console.warn(
+    'This DevKit build cannot open a Responses socket. Requests use HTTP and report no usage.',
+  );
+}
+const route = modelRoute({
+  live,
+  fallback: (request, signal) => chatgpt.streamResponse({ ...request, signal }),
 });
 
 const address = '127.0.0.1:8765';
@@ -60,13 +52,29 @@ let model;
 let sessionId = randomBytes(16).toString('hex');
 let activeInferences = 0;
 
-async function status() {
+// Picks the first eligible model once per sign-in. `contextWindow` is null when the catalog
+// does not state one.
+async function selectModel(signal) {
+  if (model) return model;
+  const checkedSession = sessionId;
+  const slug = (await chatgpt.listModels({ signal }))[0]?.slug;
+  if (!slug) throw new Error('The ChatGPT account has no available models.');
+  const selected = { slug, contextWindow: contextWindows.get(slug) ?? null };
+  // A sign-in that started meanwhile picks its own model.
+  if (checkedSession === sessionId) model = selected;
+  return selected;
+}
+
+async function status(signal) {
   const checkedSession = sessionId;
   const session = await chatgpt.getSession();
+  const ready = session.sharing && !signingIn && checkedSession === sessionId;
+  const selected = ready ? await selectModel(signal) : undefined;
   return {
-    ready: session.sharing && !signingIn && checkedSession === sessionId,
+    ready: ready && checkedSession === sessionId,
     sessionId: checkedSession,
     signingIn,
+    ...(selected && { contextWindow: selected.contextWindow }),
     ...(signInError && { error: signInError }),
   };
 }
@@ -81,6 +89,7 @@ function signIn() {
   sessionId = randomBytes(16).toString('hex');
   signInError = undefined;
   model = undefined;
+  route.close();
   chatgpt
     .signIn({ reconsent: true })
     .then(
@@ -105,26 +114,40 @@ async function infer(request, signal) {
     if (size > 2_000_000) throw new Error('The prompt context is too large.');
     chunks.push(chunk);
   }
-  const {
-    instructions,
-    input,
-    sessionId: expectedSession,
-  } = JSON.parse(Buffer.concat(chunks).toString());
-  if (signingIn || expectedSession !== sessionId) {
-    throw new Error(
-      'The companion session changed. Check the connection again.',
-    );
-  }
-  activeInferences++;
+  const body = JSON.parse(Buffer.concat(chunks).toString());
+  const { instructions, input, sessionId: expectedSession } = body;
+  const liveOnly = body.liveOnly === true;
+  const assertSession = () => {
+    if (signingIn || expectedSession !== sessionId) {
+      throw new Error(
+        'The companion session changed. Check the connection again.',
+      );
+    }
+  };
+  assertSession();
+  // Sign-in cancels a live-only request instead of waiting for it.
+  if (!liveOnly) activeInferences++;
   try {
     if (!(await chatgpt.getSession()).sharing) {
       throw new Error('Sign in with ChatGPT and allow plan usage first.');
     }
-    model ??= (await chatgpt.listModels({ signal }))[0]?.slug;
-    if (!model) throw new Error('The ChatGPT account has no available models.');
-    return await chatgpt.streamResponse({ model, instructions, input, signal });
+    const { slug } = await selectModel(signal);
+    // A sign-in during the awaits above must not receive history sent under the old session.
+    assertSession();
+    const result = await route.respond(
+      { model: slug, instructions, input },
+      { signal, liveOnly },
+    );
+    if (result.inputTokens !== undefined) {
+      console.log(
+        `${liveOnly ? 'Live-only' : 'Prompt'} request: ${
+          result.inputTokens
+        } input tokens, ${result.cachedTokens ?? 0} cached.`,
+      );
+    }
+    return result;
   } finally {
-    activeInferences--;
+    if (!liveOnly) activeInferences--;
   }
 }
 
@@ -153,7 +176,7 @@ const server = createServer(async (request, response) => {
   try {
     switch (`${request.method} ${request.url}`) {
       case 'GET /status':
-        reply(200, await status());
+        reply(200, await status(controller.signal));
         break;
       case 'POST /sign-in':
         signIn();
@@ -190,10 +213,16 @@ server.listen(8765, '127.0.0.1', () => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, async () => {
     chatgpt.cancelSignIn();
+    route.close();
     server.closeAllConnections();
     server.close();
-    await rm(storageDir, { recursive: true, force: true });
+    await sessionStore.dispose();
     process.exit(0);
   });
 }
-if (process.argv.includes('--sign-in')) signIn();
+if (
+  process.argv.includes('--sign-in') &&
+  !(await chatgpt.getSession()).sharing
+) {
+  signIn();
+}

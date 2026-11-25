@@ -12,11 +12,13 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { appLabels, mapsSteps, tasks } from './src/tasks';
 import type { Task, TaskRequest } from './src/tasks';
-import { runAgent } from './src/agent';
+import { contextBudget, fallbackContextTokens, runAgent } from './src/agent';
+import type { ContextBudget } from './src/agent';
 import { agentTools } from './src/agentTools';
 import { companion } from './src/companion';
 import { conversation } from './src/conversation';
 import type { Outcome, Turn } from './src/conversation';
+import { idleCompactor } from './src/idleCompaction';
 
 const durations = [1, 5, 10] as const;
 type Duration = (typeof durations)[number];
@@ -27,6 +29,7 @@ let submission: Promise<string | undefined> | null = null;
 const promptSavedListeners = new Set<() => void>();
 let startAttempt: string | null = null;
 let unsaved: { id: string; outcome: Outcome } | null = null;
+const compactor = idleCompactor();
 
 export default function App() {
   const [minutes, setMinutes] = useState<Duration>(10);
@@ -35,8 +38,12 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
   const [pairingCode, setPairingCode] = useState('');
-  const [sessionId, setSessionId] = useState<string>();
-  const connected = sessionId !== undefined;
+  // The companion session and a token budget for the model it selected.
+  const [session, setSession] = useState<{
+    id: string;
+    budget: ContextBudget;
+  }>();
+  const connected = session !== undefined;
   const [shareHistory, setShareHistory] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
@@ -179,6 +186,30 @@ export default function App() {
     };
   }, [running]);
 
+  // While connected, sharing history, idle and in the foreground, compaction may run on the
+  // companion's open model connection. Any change here or a new submission stops it.
+  useEffect(() => {
+    if (!session || !shareHistory || pending) return;
+    const { id, budget } = session;
+    const code = pairingCode.trim();
+    const compactWhenIdle = () =>
+      compactor.start(signal =>
+        conversation.compactIdle(
+          companion(code, id).liveModel(signal),
+          budget,
+          signal,
+        ),
+      );
+    if (AppState.currentState === 'active') compactWhenIdle();
+    const subscription = AppState.addEventListener('change', state =>
+      state === 'active' ? compactWhenIdle() : compactor.stop(),
+    );
+    return () => {
+      subscription.remove();
+      compactor.stop();
+    };
+  }, [session, shareHistory, pending, pairingCode]);
+
   function handle(operation: () => Promise<Task | void>) {
     if (submission) return;
     submission = runSubmission(operation);
@@ -186,6 +217,7 @@ export default function App() {
   }
 
   async function runSubmission(operation: () => Promise<Task | void>) {
+    compactor.stop();
     revision.current++;
     setPending(true);
     setStatus('');
@@ -217,16 +249,27 @@ export default function App() {
 
   function connect(signIn: boolean) {
     return handle(async () => {
-      setSessionId(undefined);
+      setSession(undefined);
       setShareHistory(false);
       const bridge = companion(pairingCode.trim());
       const connection = await (signIn ? bridge.signIn() : bridge.check());
-      setSessionId(connection.ready ? connection.sessionId : undefined);
+      setSession(
+        connection.ready && connection.sessionId
+          ? {
+              id: connection.sessionId,
+              budget: contextBudget(connection.contextWindow ?? null),
+            }
+          : undefined,
+      );
       setAnswer(
         connection.error ??
           (connection.ready
             ? connection.sessionId
-              ? ''
+              ? connection.contextWindow
+                ? ''
+                : `The companion did not report the model's context window. Saved conversation is budgeted for ${fallbackContextTokens.toLocaleString(
+                    'en-US',
+                  )} tokens.`
               : 'Restart the companion with the current build.'
             : connection.signingIn
             ? 'Finish sign-in on the companion computer, then check the connection.'
@@ -271,18 +314,24 @@ export default function App() {
 
       let outcome: Outcome;
       try {
-        const { model } = companion(pairingCode.trim(), sessionId);
+        const { model } = companion(
+          pairingCode.trim(),
+          session?.id,
+          compactor.report,
+        );
+        const budget = session?.budget ?? contextBudget(null);
         outcome = {
           reply: await runAgent(
             message,
             model,
             agentTools(id),
             shareScreen,
-            shareHistory ? await conversation.context(model) : [],
+            shareHistory ? await conversation.context(model, budget) : [],
+            budget,
           ),
         };
       } catch (error) {
-        setSessionId(undefined);
+        setSession(undefined);
         outcome = {
           failure:
             (error instanceof Error && error.message.trim()) ||
@@ -324,7 +373,7 @@ export default function App() {
                 value={pairingCode}
                 onChangeText={value => {
                   setPairingCode(value);
-                  setSessionId(undefined);
+                  setSession(undefined);
                   setShareHistory(false);
                   setAnswer('');
                 }}

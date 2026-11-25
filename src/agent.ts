@@ -33,20 +33,60 @@ export const instructions = [
   screenDefault,
 ].join('\n\n');
 
-// Sizes are characters of the JSON body sent to the companion, `{instructions, input}`,
-// estimated at roughly four characters per token. Nothing is measured with the model's tokenizer.
-export const contextBudget = {
-  // Largest request sent to the model; every model call is checked against it.
-  requestLimit: 64_000,
-  // Kept free after stored history for the current prompt, screen tools, tool results and the reply.
-  headroom: 24_000,
-  // Summarize stored history once it grows past this size.
-  compactAt: 32_000,
-};
+// Assumed when the companion reports no context window for its model. Deliberately small:
+// an unknown model is budgeted as a short-context one rather than guessed large.
+export const fallbackContextTokens = 32_000;
 
-// Estimated request size, in characters of the JSON body.
+// The companion rejects request bodies over 2,000,000 bytes; leave room for its envelope.
+const payloadBytes = 1_990_000;
+
+// Token budget for a model with `contextTokens` of context, input and output together, or the
+// fallback when that is unknown. Every model call must fit `requestTokens` and `payloadBytes`.
+export function contextBudget(contextTokens: number | null) {
+  const window = contextTokens ?? fallbackContextTokens;
+  // Kept free on every call for reasoning and the reply.
+  const outputTokens = Math.min(32_000, Math.floor(window / 4));
+  const requestTokens = window - outputTokens;
+  // Stored history leaves a quarter of the request for the current turn:
+  // its prompt, screen tools and tool results.
+  const historyTokens = Math.floor((requestTokens * 3) / 4);
+  return {
+    requestTokens,
+    historyTokens,
+    // Summarize stored history early, while a summary request and the next turn still fit.
+    compactAt: Math.floor(historyTokens * 0.8),
+    payloadBytes,
+  };
+}
+export type ContextBudget = ReturnType<typeof contextBudget>;
+
+function utf8Length(text: string) {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    // A surrogate pair is two UTF-16 units and four UTF-8 bytes.
+    bytes +=
+      code < 0x80
+        ? 1
+        : code < 0x800 || (code >= 0xd800 && code < 0xe000)
+        ? 2
+        : 3;
+  }
+  return bytes;
+}
+
+// Size of the JSON body sent to the companion, `{instructions, input}`. Tokens are estimated at
+// three UTF-8 bytes each: English averages about four, so the estimate errs high, and most CJK
+// characters are three bytes and about one token. Nothing runs the model's tokenizer.
 export function requestSize(input: Message[]) {
-  return JSON.stringify({ instructions, input }).length;
+  const bytes = utf8Length(JSON.stringify({ instructions, input }));
+  return { bytes, tokens: Math.ceil(bytes / 3) };
+}
+
+// Whether `input` stays within `tokens` and the HTTP payload bound.
+export function fits(input: Message[], tokens: number, budget: ContextBudget) {
+  const size = requestSize(input);
+  return size.tokens <= tokens && size.bytes <= budget.payloadBytes;
 }
 
 const screenTools = `Screen sharing is on for this request. These tools are also available:
@@ -160,7 +200,7 @@ export async function runAgent(
   tools: AgentTools,
   shareScreen = false,
   history: Message[] = [],
-  requestLimit = contextBudget.requestLimit,
+  budget = contextBudget(null),
 ): Promise<string> {
   // Screen tools follow the prompt only when shared, so earlier messages stay a reusable prefix.
   const input: Message[] = [
@@ -231,7 +271,7 @@ export async function runAgent(
 
   try {
     for (let turn = 0; turn < 18; turn++) {
-      if (requestSize(input) > requestLimit) {
+      if (!fits(input, budget.requestTokens, budget)) {
         throw new Error(
           turn === 0
             ? 'This request is too large to send.'

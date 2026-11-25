@@ -1,10 +1,5 @@
-import {
-  contextBudget,
-  finishMessage,
-  instructions,
-  requestSize,
-} from './agent';
-import type { Message, Model } from './agent';
+import { finishMessage, fits, instructions, requestSize } from './agent';
+import type { ContextBudget, Message, Model } from './agent';
 import NativeTasks from './native/NativeTasks';
 import { tasks } from './tasks';
 import type { Task } from './tasks';
@@ -51,26 +46,40 @@ export const conversation = {
   start: (prompt: string, attempt: string) =>
     NativeTasks.startTurn(prompt, attempt),
   // Returns model input from completed turns: the checkpoint, then exact turns after its coverage.
-  // Near the budget it first summarizes that input through `model` and switches to the saved summary.
-  async context(model: Model, budget = contextBudget): Promise<Message[]> {
-    const limit = budget.requestLimit - budget.headroom;
+  // Past `budget.compactAt` estimated tokens it first summarizes that input through `model` and
+  // switches to the saved summary.
+  async context(model: Model, budget: ContextBudget): Promise<Message[]> {
+    const limit = budget.historyTokens;
     const saved = await NativeTasks.readCheckpoint();
     let checkpoint: Checkpoint | null =
       saved === null ? null : JSON.parse(saved);
-    let read = await uncovered(checkpoint, limit);
+    let read = await uncovered(checkpoint, limit, budget);
     if (
       !read.complete ||
-      requestSize(prefix(checkpoint, read.turns)) > budget.compactAt
+      requestSize(prefix(checkpoint, read.turns)).tokens > budget.compactAt
     ) {
       const next = await compact(model, checkpoint, read.turns, budget);
       if (next) {
         checkpoint = next;
-        read = await uncovered(checkpoint, limit);
+        read = await uncovered(checkpoint, limit, budget);
       }
     }
     // Past the limit, send the newest turns that fit without moving the checkpoint.
-    const turns = read.complete ? read.turns : await newest(checkpoint, limit);
+    const turns = read.complete
+      ? read.turns
+      : await newest(checkpoint, limit, budget);
     return prefix(checkpoint, turns);
+  },
+  // Summarizes the same input a following prompt would send and saves it as the checkpoint.
+  // Nothing is saved once `signal` aborts, so a result that arrives after a new prompt, a session
+  // change or withdrawn sharing is dropped. Resolves whether a checkpoint was saved.
+  async compactIdle(model: Model, budget: ContextBudget, signal: AbortSignal) {
+    const saved = await NativeTasks.readCheckpoint();
+    const checkpoint: Checkpoint | null =
+      saved === null ? null : JSON.parse(saved);
+    const { turns } = await uncovered(checkpoint, budget.historyTokens, budget);
+    if (signal.aborted) return false;
+    return (await compact(model, checkpoint, turns, budget, signal)) !== null;
   },
   // Saves the outcome of a running turn. Retrying after a rejected or unacknowledged save is safe:
   // a save that already landed succeeds again.
@@ -97,8 +106,12 @@ function prefix(checkpoint: Checkpoint | null, turns: Completed[]): Message[] {
   ];
 }
 
-// Reads completed turns after the checkpoint, oldest first, while the prefix fits in `limit`.
-async function uncovered(checkpoint: Checkpoint | null, limit: number) {
+// Reads completed turns after the checkpoint, oldest first, while the prefix fits in `limit` tokens.
+async function uncovered(
+  checkpoint: Checkpoint | null,
+  limit: number,
+  budget: ContextBudget,
+) {
   const turns: Completed[] = [];
   let after = checkpoint?.covers ?? null;
   for (;;) {
@@ -106,7 +119,7 @@ async function uncovered(checkpoint: Checkpoint | null, limit: number) {
       await NativeTasks.readCompletedTurns(after, 20),
     );
     for (const turn of page) {
-      if (requestSize(prefix(checkpoint, [...turns, turn])) > limit) {
+      if (!fits(prefix(checkpoint, [...turns, turn]), limit, budget)) {
         return { turns, complete: false };
       }
       turns.push(turn);
@@ -116,8 +129,12 @@ async function uncovered(checkpoint: Checkpoint | null, limit: number) {
   }
 }
 
-// Reads the newest completed turns after the checkpoint that fit in `limit`, oldest first.
-async function newest(checkpoint: Checkpoint | null, limit: number) {
+// Reads the newest completed turns after the checkpoint that fit in `limit` tokens, oldest first.
+async function newest(
+  checkpoint: Checkpoint | null,
+  limit: number,
+  budget: ContextBudget,
+) {
   const turns: Completed[] = [];
   let before: string | null = null;
   for (;;) {
@@ -127,7 +144,7 @@ async function newest(checkpoint: Checkpoint | null, limit: number) {
         return turns;
       }
       if (turn.status !== 'COMPLETED') continue;
-      if (requestSize(prefix(checkpoint, [turn, ...turns])) > limit) {
+      if (!fits(prefix(checkpoint, [turn, ...turns]), limit, budget)) {
         return turns;
       }
       turns.unshift(turn);
@@ -138,21 +155,23 @@ async function newest(checkpoint: Checkpoint | null, limit: number) {
 }
 
 // Asks for a summary of the same prefix and saves it with its coverage. Returns null and keeps the
-// current checkpoint when the reply is not a lone finish call or saving fails. Never runs tools.
+// current checkpoint when the reply is not a lone finish call, `signal` aborted or saving fails.
+// Never runs tools.
 async function compact(
   model: Model,
   checkpoint: Checkpoint | null,
   turns: Completed[],
-  budget: typeof contextBudget,
+  budget: ContextBudget,
+  signal?: AbortSignal,
 ): Promise<Checkpoint | null> {
   const input: Message[] = [
     ...prefix(checkpoint, turns),
     { role: 'user', content: summaryRequest },
   ];
-  if (!turns.length || requestSize(input) > budget.requestLimit) return null;
+  if (!turns.length || !fits(input, budget.requestTokens, budget)) return null;
   try {
     const summary = finishMessage(await model(instructions, input));
-    if (!summary) return null;
+    if (!summary || signal?.aborted) return null;
     const next = { summary, covers: turns[turns.length - 1].id };
     await NativeTasks.saveCheckpoint(next.summary, next.covers);
     return next;

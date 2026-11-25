@@ -1,4 +1,10 @@
-import { instructions, requestSize, runAgent } from '../src/agent';
+import {
+  contextBudget,
+  fallbackContextTokens,
+  instructions,
+  requestSize,
+  runAgent,
+} from '../src/agent';
 import type { AgentTools, Model } from '../src/agent';
 
 function device() {
@@ -167,7 +173,10 @@ test('screen sharing adds its tools after the prompt for that request only', asy
 
 test('does not call the model when the current request alone is over the limit', async () => {
   const model = decisions({ tool: 'finish', message: 'Done.' });
-  const limit = requestSize([{ role: 'user', content: 'Hi' }]);
+  const limit = {
+    ...contextBudget(null),
+    requestTokens: requestSize([{ role: 'user', content: 'Hi' }]).tokens,
+  };
 
   await expect(
     runAgent('Hello', model, device(), false, [], limit),
@@ -182,11 +191,35 @@ test('stops before a model call once tool results push the request over the limi
     { tool: 'start_timer', seconds: 90 },
     { tool: 'finish', message: 'Done.' },
   );
-  const limit = requestSize([{ role: 'user', content: 'Set a timer' }]);
+  const limit = {
+    ...contextBudget(null),
+    requestTokens: requestSize([{ role: 'user', content: 'Set a timer' }])
+      .tokens,
+  };
 
   await expect(
     runAgent('Set a timer', model, tools, false, [], limit),
   ).rejects.toThrow('Check the device for any actions already taken');
   expect(model).toHaveBeenCalledTimes(1);
   expect(tools.startTimer).toHaveBeenCalledTimes(1);
+});
+
+test('budgets an unreported context window as the small fallback', () => {
+  const unknown = contextBudget(null);
+  expect(unknown.requestTokens).toBe(fallbackContextTokens * 0.75);
+  expect(unknown.historyTokens).toBeLessThan(unknown.requestTokens);
+  expect(unknown.compactAt).toBeLessThan(unknown.historyTokens);
+
+  const large = contextBudget(400_000);
+  // Output and the current turn stay reserved; history compacts before it fills its share.
+  expect(large.requestTokens).toBe(368_000);
+  expect(large.historyTokens).toBe(276_000);
+  expect(large.compactAt).toBe(220_800);
+});
+
+test('estimates tokens from UTF-8 bytes, so non-Latin text counts higher', () => {
+  const ascii = requestSize([{ role: 'user', content: 'a'.repeat(300) }]);
+  const cjk = requestSize([{ role: 'user', content: '字'.repeat(300) }]);
+  expect(cjk.bytes - ascii.bytes).toBe(600);
+  expect(cjk.tokens - ascii.tokens).toBe(200);
 });

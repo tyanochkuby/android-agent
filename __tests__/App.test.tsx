@@ -4,8 +4,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import NativeTasks from '../src/native/NativeTasks';
 import type { TaskRequest } from '../src/tasks';
+import * as companionModule from '../src/companion';
 import { companion } from '../src/companion';
 import { instructions } from '../src/agent';
+import type { Model } from '../src/agent';
+import { idleDelayMs } from '../src/idleCompaction';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -114,6 +117,7 @@ async function connectCompanion(model: jest.Mock) {
       .fn()
       .mockResolvedValue({ ready: true, sessionId: 'test-session' }),
     model,
+    liveModel: jest.fn(),
   } satisfies ReturnType<typeof companion>);
   await fireEvent.changeText(
     screen.getByLabelText('Companion pairing code'),
@@ -282,9 +286,12 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
     .mockResolvedValue(
       '[{"tool":"finish","message":"Ready for Android tasks."}]',
     );
-  bridge.mockReturnValue({ signIn, check, model } satisfies ReturnType<
-    typeof companion
-  >);
+  bridge.mockReturnValue({
+    signIn,
+    check,
+    model,
+    liveModel: jest.fn(),
+  } satisfies ReturnType<typeof companion>);
   try {
     await render(<App />);
     await fireEvent.changeText(
@@ -543,4 +550,182 @@ test('pages through earlier turns', async () => {
   await fireEvent.press(screen.getByRole('button', { name: 'Show earlier' }));
   expect(screen.getByText('Prompt 1')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
+});
+
+describe('idle compaction', () => {
+  let summaries: {
+    signal: AbortSignal;
+    input: Parameters<Model>[1];
+    reply: (summary: string) => void;
+  }[];
+
+  // The preset's AppState mock reports no state; the app is in the foreground here.
+  const mockedState = AppState.currentState;
+  beforeEach(() => {
+    jest.useFakeTimers();
+    summaries = [];
+    jest.mocked(NativeTasks.saveCheckpoint).mockReset();
+    AppState.currentState = 'active';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    AppState.currentState = mockedState;
+  });
+
+  // Every prompt request reports `inputTokens`; idle summaries wait until the test replies.
+  async function connect(inputTokens: number) {
+    const bridge = jest.spyOn(companionModule, 'companion');
+    bridge.mockImplementation((_, __, onUsage) => ({
+      signIn: jest.fn(),
+      check: jest
+        .fn()
+        .mockResolvedValue({ ready: true, sessionId: 'test-session' }),
+      model: async () => {
+        onUsage?.(inputTokens);
+        return '[{"tool":"finish","message":"Done."}]';
+      },
+      liveModel: (signal: AbortSignal) => (_instructions, input) =>
+        new Promise<string>(resolve =>
+          summaries.push({
+            signal,
+            input,
+            reply: summary =>
+              resolve(JSON.stringify([{ tool: 'finish', message: summary }])),
+          }),
+        ),
+    }));
+    await fireEvent.changeText(
+      screen.getByLabelText('Companion pairing code'),
+      'a'.repeat(32),
+    );
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Check connection' }),
+    );
+    await fireEvent.press(
+      screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+    );
+    return bridge;
+  }
+
+  const idle = (ms = idleDelayMs) =>
+    act(() => jest.advanceTimersByTimeAsync(ms));
+
+  test('summarizes on the live connection two minutes after a large turn', async () => {
+    await render(<App />);
+    const bridge = await connect(250_000);
+    try {
+      await ask('Remember my dog Rex.');
+      await idle(idleDelayMs - 1);
+      expect(summaries).toHaveLength(0);
+      await idle(1);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0].input).toEqual([
+        { role: 'user', content: 'Remember my dog Rex.' },
+        { role: 'assistant', content: 'Done.' },
+        { role: 'user', content: expect.stringMatching(/^Summarize/) },
+      ]);
+      await act(async () => summaries[0].reply('User has a dog named Rex.'));
+      expect(NativeTasks.saveCheckpoint).toHaveBeenCalledWith(
+        'User has a dog named Rex.',
+        '1',
+      );
+      // The same context is not summarized twice.
+      await idle(idleDelayMs * 3);
+      expect(summaries).toHaveLength(1);
+    } finally {
+      bridge.mockRestore();
+    }
+  });
+
+  test('does not run at or below 200,000 input tokens', async () => {
+    await render(<App />);
+    const bridge = await connect(200_000);
+    try {
+      await ask('Small context.');
+      await idle(idleDelayMs * 3);
+      expect(summaries).toHaveLength(0);
+    } finally {
+      bridge.mockRestore();
+    }
+  });
+
+  test('a new prompt cancels the summary and its late result is not saved', async () => {
+    await render(<App />);
+    const bridge = await connect(250_000);
+    try {
+      await ask('First prompt.');
+      await idle();
+      expect(summaries).toHaveLength(1);
+      await ask('Second prompt.');
+      expect(summaries[0].signal.aborted).toBe(true);
+      await act(async () => summaries[0].reply('Stale summary.'));
+      expect(NativeTasks.saveCheckpoint).not.toHaveBeenCalled();
+      expect(turns.map(turn => turn.status)).toEqual([
+        'COMPLETED',
+        'COMPLETED',
+      ]);
+    } finally {
+      bridge.mockRestore();
+    }
+  });
+
+  test.each([
+    [
+      'sharing is turned off',
+      () =>
+        fireEvent.press(
+          screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+        ),
+    ],
+    [
+      'the pairing changes',
+      () =>
+        fireEvent.changeText(
+          screen.getByLabelText('Companion pairing code'),
+          'b'.repeat(32),
+        ),
+    ],
+  ])('stops and drops the result when %s', async (_, change) => {
+    await render(<App />);
+    const bridge = await connect(250_000);
+    try {
+      await ask('First prompt.');
+      await idle();
+      await change();
+      expect(summaries[0].signal.aborted).toBe(true);
+      await act(async () => summaries[0].reply('Stale summary.'));
+      expect(NativeTasks.saveCheckpoint).not.toHaveBeenCalled();
+      await idle(idleDelayMs * 3);
+      expect(summaries).toHaveLength(1);
+    } finally {
+      bridge.mockRestore();
+    }
+  });
+
+  test('waits while the app is in the background', async () => {
+    const listeners: ((state: string) => void)[] = [];
+    const subscribe = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_, listener) => {
+        listeners.push(listener as (state: string) => void);
+        return { remove: jest.fn() } as never;
+      });
+    await render(<App />);
+    const bridge = await connect(250_000);
+    try {
+      await ask('First prompt.');
+      await idle(idleDelayMs - 1_000);
+      await act(async () =>
+        listeners.forEach(listener => listener('background')),
+      );
+      await idle(idleDelayMs * 3);
+      expect(summaries).toHaveLength(0);
+      await act(async () => listeners.forEach(listener => listener('active')));
+      await idle();
+      expect(summaries).toHaveLength(1);
+    } finally {
+      bridge.mockRestore();
+      subscribe.mockRestore();
+    }
+  });
 });
