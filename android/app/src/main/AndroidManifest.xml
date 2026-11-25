@@ -29,6 +29,7 @@
       </activity>
       <service
         android:name=".assistant.AssistantService"
+        android:enabled="@bool/assistant_prototype_enabled"
         android:exported="true"
         android:permission="android.permission.BIND_VOICE_INTERACTION">
         <intent-filter>
