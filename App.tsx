@@ -15,10 +15,19 @@ import { appLabels, tasks } from './src/tasks';
 import type { Task } from './src/tasks';
 import { contextBudget, fallbackContextTokens } from './src/agent';
 import { agentTools } from './src/agentTools';
+import { chatgpt } from './src/chatgpt';
+import type { Account, Connection } from './src/chatgpt';
 import { companion } from './src/companion';
 import { conversation } from './src/conversation';
 import type { Outcome, Turn } from './src/conversation';
-import { ask, compactor, exclusive, prompts } from './src/prompts';
+import {
+  ask,
+  compactor,
+  connectedModel,
+  exclusive,
+  prompts,
+  recoverChatGPTConnection,
+} from './src/prompts';
 import { emptySettings, settings } from './src/settings';
 import type { Settings } from './src/settings';
 
@@ -32,6 +41,8 @@ export default function App() {
   const [config, setConfig] = useState<Settings>(emptySettings);
   const { pairingCode, session, shareHistory } = config;
   const connected = session !== undefined;
+  const [account, setAccount] = useState<Account | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
@@ -96,6 +107,10 @@ export default function App() {
       .read()
       .then(saved => active && setConfig(saved))
       .catch(() => {});
+    chatgpt
+      .status()
+      .then(saved => active && setAccount(saved))
+      .catch(() => {});
     loadHistory().catch(
       () => active && setAnswer('Could not load the conversation.'),
     );
@@ -107,6 +122,10 @@ export default function App() {
       setPending(prompts.busy);
       loadHistory().catch(() => {});
       if (prompts.busy) return;
+      chatgpt
+        .status()
+        .then(saved => active && setAccount(saved))
+        .catch(() => {});
       tasks
         .read()
         .then(snapshot => active && updateTask(snapshot))
@@ -163,22 +182,31 @@ export default function App() {
     };
   }, [running]);
 
-  // While connected, sharing history, idle and in the foreground, compaction may run on the
-  // companion's open model connection. Any change here or a new submission stops it.
+  // While connected, sharing history, idle and in the foreground, compaction may run as background
+  // model work. Any change here or a new submission stops it.
   const sessionId = session?.id;
+  const direct = session?.chatgpt;
   const contextWindow = session?.contextWindow ?? null;
   useEffect(() => {
     if (!sessionId || !shareHistory || pending) return;
     const budget = contextBudget(contextWindow);
-    const code = pairingCode.trim();
+    const live = { id: sessionId, contextWindow, chatgpt: direct };
     const compactWhenIdle = () =>
-      compactor.start(signal =>
-        conversation.compactIdle(
-          companion(code, sessionId).liveModel(signal),
+      compactor.start(signal => {
+        const model = connectedModel(pairingCode, live, undefined, signal, true);
+        return conversation.compactIdle(
+          async (...input) => {
+            try {
+              return await model(...input);
+            } catch (error) {
+              if (direct) await recoverChatGPTConnection(sessionId);
+              throw error;
+            }
+          },
           budget,
           signal,
-        ),
-      );
+        );
+      });
     if (AppState.currentState === 'active') compactWhenIdle();
     const subscription = AppState.addEventListener('change', state =>
       state === 'active' ? compactWhenIdle() : compactor.stop(),
@@ -187,7 +215,7 @@ export default function App() {
       subscription.remove();
       compactor.stop();
     };
-  }, [sessionId, contextWindow, shareHistory, pending, pairingCode]);
+  }, [sessionId, direct, contextWindow, shareHistory, pending, pairingCode]);
 
   function handle(operation: () => Promise<Task | null | void>) {
     if (prompts.busy) return;
@@ -210,13 +238,17 @@ export default function App() {
     return handle(async () => {
       compactor.report(undefined);
       const code = pairingCode.trim();
-      await settings.save({ pairingCode, shareHistory: false });
+      const scope = config.scope?.owner.startsWith('chatgpt:')
+        ? config.scope
+        : undefined;
+      await settings.save({ pairingCode, shareHistory: false, scope });
       const bridge = companion(code);
       const connection = await (signIn ? bridge.signIn() : bridge.check());
       if (connection.ready && connection.sessionId) {
         await settings.save({
           pairingCode,
           shareHistory: false,
+          scope,
           session: {
             id: connection.sessionId,
             contextWindow: connection.contextWindow ?? null,
@@ -236,6 +268,56 @@ export default function App() {
             : connection.signingIn
             ? 'Finish sign-in on the companion computer, then check the connection.'
             : 'Sign in with ChatGPT on the companion computer.'),
+      );
+    });
+  }
+
+  function signInWithChatGPT() {
+    return handle(async () => {
+      compactor.report(undefined);
+      setAnswer('');
+      await settings.disconnect();
+      let connection: Connection;
+      setSigningIn(true);
+      try {
+        connection = await (account?.signedIn
+          ? chatgpt.connect()
+          : chatgpt.signIn());
+      } finally {
+        setSigningIn(false);
+        setAccount(await chatgpt.status().catch(() => null));
+      }
+      await settings.save({
+        ...(await settings.read()),
+        shareHistory: false,
+        session: {
+          id: connection.account,
+          contextWindow: connection.contextWindow,
+          chatgpt: true,
+        },
+      });
+      if (!connection.contextWindow) {
+        setAnswer(
+          `ChatGPT did not report the model's context window. Saved conversation is budgeted for ${fallbackContextTokens.toLocaleString(
+            'en-US',
+          )} tokens.`,
+        );
+      }
+    });
+  }
+
+  function signOut() {
+    return handle(async () => {
+      compactor.stop();
+      compactor.report(undefined);
+      setAnswer('');
+      await settings.disconnect();
+      const confirmed = await chatgpt.signOut();
+      setAccount(await chatgpt.status().catch(() => null));
+      setAnswer(
+        confirmed
+          ? 'Signed out of ChatGPT.'
+          : 'Signed out on this phone, but ChatGPT did not confirm the disconnection. Disconnect Android Agent in ChatGPT Settings.',
       );
     });
   }
@@ -278,68 +360,141 @@ export default function App() {
           >
             <Text style={styles.brand}>Android Agent</Text>
             <View style={styles.panel}>
-              <TextInput
-                accessibilityLabel="Companion pairing code"
-                placeholder="Companion pairing code"
-                placeholderTextColor="#A4AB9B"
-                style={styles.input}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry
-                maxLength={32}
-                editable={!busy}
-                value={pairingCode}
-                onChangeText={value => {
-                  compactor.stop();
-                  compactor.report(undefined);
-                  setAnswer('');
-                  settings
-                    .save({ pairingCode: value, shareHistory: false })
-                    .catch(() => {});
-                }}
-              />
               {!connected && (
                 <>
                   <Text style={styles.description}>
-                    Pair with the companion on your computer to use your ChatGPT
-                    plan.
+                    {account
+                      ? `${
+                          account.signedIn ? 'Signed in' : 'Sign in again'
+                        } as ${account.email ?? 'your ChatGPT account'}.`
+                      : 'Sign in with ChatGPT to use your plan on this phone.'}
                   </Text>
+                  {signingIn ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => chatgpt.cancelSignIn().catch(() => {})}
+                      style={styles.secondary}
+                    >
+                      <Text style={styles.label}>Cancel sign-in</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={busy}
+                      onPress={() => {
+                        signInWithChatGPT();
+                      }}
+                      style={styles.button}
+                    >
+                      <Text style={styles.buttonText}>
+                        {account?.signedIn
+                          ? 'Continue with ChatGPT'
+                          : 'Sign in with ChatGPT'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </>
+              )}
+              {account?.signedIn && (connected ? direct : !signingIn) && (
+                <>
+                  {connected && (
+                    <Text style={styles.description}>
+                      Signed in as {account.email ?? 'your ChatGPT account'}.
+                    </Text>
+                  )}
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy}
+                    onPress={signOut}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.label}>Sign out of ChatGPT</Text>
+                  </Pressable>
+                </>
+              )}
+              {(!connected || !direct) && (
+                <>
+                  {!connected && (
+                    <Text style={styles.detail}>
+                      Or pair with the companion on your computer.
+                    </Text>
+                  )}
+                  <TextInput
+                    accessibilityLabel="Companion pairing code"
+                    placeholder="Companion pairing code"
+                    placeholderTextColor="#A4AB9B"
+                    style={styles.input}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    secureTextEntry
+                    maxLength={32}
+                    editable={!busy}
+                    value={pairingCode}
+                    onChangeText={value => {
+                      compactor.stop();
+                      compactor.report(undefined);
+                      setAnswer('');
+                      settings
+                        .save({
+                          pairingCode: value,
+                          shareHistory: false,
+                          scope: config.scope,
+                        })
+                        .catch(() => {});
+                    }}
+                  />
+                </>
+              )}
+              {!connected && (
+                <View style={styles.row}>
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || pairingCode.length !== 32}
                     onPress={() => connect(true)}
-                    style={styles.button}
+                    style={[styles.secondary, styles.grow]}
                   >
-                    <Text style={styles.buttonText}>Sign in with ChatGPT</Text>
+                    <Text style={styles.label}>Sign in on companion</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || pairingCode.length !== 32}
                     onPress={() => connect(false)}
-                    style={styles.secondary}
+                    style={[styles.secondary, styles.grow]}
                   >
                     <Text style={styles.label}>Check connection</Text>
                   </Pressable>
-                </>
+                </View>
               )}
               {connected && (
-                <Pressable
-                  accessibilityRole="checkbox"
-                  accessibilityLabel="Share saved conversation"
-                  accessibilityState={{ checked: shareHistory, disabled: busy }}
-                  disabled={busy}
-                  onPress={() =>
-                    settings
-                      .save({ ...config, shareHistory: !shareHistory })
-                      .catch(() => {})
-                  }
-                  style={[styles.secondary, shareHistory && styles.selected]}
-                >
-                  <Text style={styles.label}>
-                    {shareHistory ? '☑' : '☐'} Share saved conversation with
-                    this connection
+                <>
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityLabel="Share earlier conversation"
+                    accessibilityState={{
+                      checked: shareHistory,
+                      disabled: busy,
+                    }}
+                    disabled={busy}
+                    onPress={() =>
+                      settings
+                        .save({ ...config, shareHistory: !shareHistory })
+                        .catch(() => {})
+                    }
+                    style={[styles.secondary, shareHistory && styles.selected]}
+                  >
+                    <Text style={styles.label}>
+                      {shareHistory ? '☑' : '☐'} Share earlier conversation with
+                      this connection
+                    </Text>
+                  </Pressable>
+                  <Text style={styles.detail}>
+                    {shareHistory
+                      ? 'Replies use the whole saved conversation until this connection ends.'
+                      : `Replies remember turns ${
+                          direct ? 'on this ChatGPT account' : 'in this session'
+                        }, typed or spoken. Earlier turns stay on this phone.`}
                   </Text>
-                </Pressable>
+                </>
               )}
             </View>
             {earlier && (

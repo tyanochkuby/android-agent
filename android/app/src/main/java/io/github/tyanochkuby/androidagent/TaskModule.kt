@@ -2,6 +2,7 @@ package io.github.tyanochkuby.androidagent
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
@@ -13,6 +14,12 @@ import io.github.tyanochkuby.androidagent.tasks.UiSession
 import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import io.github.tyanochkuby.androidagent.tasks.TaskRequest
 import io.github.tyanochkuby.androidagent.tasks.taskJson
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +35,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   private val application = context.applicationContext as MainApplication
   private val executor = application.taskExecutor
   private val conversation = application.conversation
+  private val chatgpt = application.chatgpt
 
   // Turns run in JavaScript, so a turn still running when this runtime starts was interrupted.
   private val recoveryLock = Mutex()
@@ -83,9 +91,9 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     null
   }
 
-  override fun startTurn(prompt: String, attempt: String, promise: Promise) = respond(promise) {
+  override fun startTurn(prompt: String, attempt: String, owner: String?, promise: Promise) = respond(promise) {
     recoverConversation()
-    conversation.start(prompt, attempt)
+    conversation.start(prompt, attempt, owner)
   }
 
   override fun completeTurn(id: String, reply: String, promise: Promise) = respond(promise) {
@@ -100,7 +108,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     null
   }
 
-  // Companion settings stay on the device so a voice turn can run while Android Agent is closed.
+  // Connection settings stay on the device so a voice turn can run while Android Agent is closed.
   private val preferences = context.getSharedPreferences(SETTINGS, Context.MODE_PRIVATE)
 
   override fun readSettings(promise: Promise) = respond(promise) {
@@ -110,6 +118,52 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   override fun saveSettings(settings: String, promise: Promise) = respond(promise) {
     check(preferences.edit().putString(SETTINGS, settings).commit()) { "Could not save the settings." }
     null
+  }
+
+  override fun chatgptStatus(promise: Promise) = respond(promise) {
+    chatgpt.status()?.let { taskJson.encodeToString(it) }
+  }
+
+  override fun chatgptSignIn(promise: Promise) = respond(promise) {
+    val connection = chatgpt.signIn { url ->
+      val activity = checkNotNull(MainActivity.foregroundSession?.activity) { "Open Android Agent first." }
+      activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }
+    taskJson.encodeToString(connection)
+  }
+
+  override fun chatgptCancelSignIn(promise: Promise) = respond(promise) {
+    chatgpt.cancelSignIn()
+    null
+  }
+
+  override fun chatgptConnect(promise: Promise) = respond(promise) {
+    taskJson.encodeToString(chatgpt.connect())
+  }
+
+  override fun chatgptSignOut(promise: Promise) = respond(promise) {
+    chatgpt.signOut().toString()
+  }
+
+  override fun chatgptRespond(
+    account: String, instructions: String, input: String, shareHistory: Boolean, promise: Promise,
+  ) = respond(promise) {
+    val reply = chatgpt.respond(account, instructions, input) {
+      !shareHistory || canShareHistory(account)
+    }
+    buildJsonObject {
+      put("text", reply.text)
+      put("inputTokens", reply.inputTokens)
+    }.toString()
+  }
+
+  private fun canShareHistory(account: String): Boolean {
+    val saved = preferences.getString(SETTINGS, null) ?: return false
+    val config = taskJson.parseToJsonElement(saved).jsonObject
+    if (config["shareHistory"]?.jsonPrimitive?.booleanOrNull != true) return false
+    val session = config["session"]?.jsonObject ?: return false
+    return session["chatgpt"]?.jsonPrimitive?.booleanOrNull == true &&
+      session["id"]?.jsonPrimitive?.contentOrNull == account
   }
 
   override fun finishVoiceTurn(id: String, text: String, failed: Boolean, promise: Promise) = respond(promise) {

@@ -1,6 +1,6 @@
 # Android Agent
 
-Android Agent is an Android-first assistant project. The app is a chat with an agent that runs Android tools on the phone and uses a ChatGPT plan through a companion on your computer. On API 36 it can also be the default digital assistant and answer spoken prompts over other apps.
+Android Agent is an Android-first assistant project. The app is a chat with an agent that runs Android tools on the phone and uses your ChatGPT plan after you sign in with ChatGPT on the phone. On API 36 it can also be the default digital assistant and answer spoken prompts over other apps.
 
 See [the architecture and Android constraints](docs/architecture.md) for the Kotlin executor contract, recovery behavior, and app verification.
 
@@ -31,7 +31,11 @@ If the app loads but Fast Refresh disconnects on the emulator, run `adb reverse 
 
 ## Prompt runner
 
-The debug app sends prompts to ChatGPT through a Node.js companion on your computer, connected over USB. The companion signs in with OpenAI's open-source [Sign in with ChatGPT DevKit](https://developers.openai.com/siwc/token-sharing-open-source) and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on your ChatGPT plan. It uses the first model in the account's eligible catalog. The phone receives model replies and runs the tools itself. On macOS the companion saves the ChatGPT session locally, encrypted with a key in Keychain. Other platforms keep sign-in in memory for the lifetime of the companion.
+Tap **Sign in with ChatGPT**, sign in in the browser and allow ChatGPT plan usage, then return to Android Agent. The app uses OpenAI's [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) flow and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on the first model in the account's eligible catalog. The credentials stay on the phone, encrypted with an Android Keystore key. **Sign out of ChatGPT** removes them and revokes the sign-in. Later sign-ins must use the same ChatGPT account.
+
+### Companion
+
+The app can also send prompts through a Node.js companion on your computer, connected over USB. The companion signs in with OpenAI's open-source [Sign in with ChatGPT DevKit](https://developers.openai.com/siwc/token-sharing-open-source) and streams replies from the public [Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) on your ChatGPT plan. It uses the first model in the account's eligible catalog. The phone receives model replies and runs the tools itself. On macOS the companion saves the ChatGPT session locally, encrypted with a key in Keychain. Other platforms keep sign-in in memory for the lifetime of the companion.
 
 Build the DevKit in a separate checkout. It has its own [license](https://github.com/openai/sign-in-with-chatgpt-devkit/blob/main/LICENSE). The patch from this repository adds one method, `openResponsesSocket`, which opens an authenticated Responses WebSocket while the DevKit keeps refreshing and storing the credentials. The companion reuses that socket so the provider can serve the conversation prefix from cache and report token usage. Without the patch the companion falls back to HTTP, reports no usage and never compacts idle conversations.
 
@@ -53,9 +57,12 @@ adb reverse tcp:8765 tcp:8765
 
 Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page at startup if there is no saved session with plan usage enabled.
 
-1. In Android Agent, enter the pairing code the companion printed and tap **Check connection**. If sign-in is needed, tap **Sign in with ChatGPT**, approve plan usage in the browser, then check the connection again. After a companion restart on macOS, enter the new pairing code and check the connection to use the saved session.
-2. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
-3. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
+In Android Agent, enter the pairing code the companion printed and tap **Check connection**. If sign-in is needed, tap **Sign in on companion**, approve plan usage in the browser, then check the connection again. After a companion restart on macOS, enter the new pairing code and check the connection to use the saved session.
+
+### Try it
+
+1. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
+2. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
 
 Each model reply is an ordered list of tool calls, and the results go back to the model for the next step. A prompt gets at most one timer dispatch, because a failed call can leave the dispatch outcome unknown, and one foreground UI session. Clock works without screen sharing.
 
@@ -78,7 +85,7 @@ To build a debug APK that runs without Metro, add `-PbundleJs`. It is signed wit
 
 ## Device smoke test
 
-Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps installed and the companion connected. An API 36 Google APIs emulator with those apps can exercise the same flow.
+Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps installed and Android Agent signed in with ChatGPT. An API 36 Google APIs emulator with those apps can exercise the same flow.
 
 1. Send `Set a timer for 1 minute`. Open Clock to confirm the countdown and dismiss the test timer. In Android Agent, the saved step reads `issued`. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
 2. Tap the Accessibility settings note under the composer, enable **Android Agent window verification**, and return to Android Agent. Android may require allowing restricted settings for the sideloaded app before it can enable the service.

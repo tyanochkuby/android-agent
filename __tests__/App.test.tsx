@@ -9,6 +9,7 @@ import { companion } from '../src/companion';
 import { instructions } from '../src/agent';
 import type { Model } from '../src/agent';
 import { idleDelayMs } from '../src/idleCompaction';
+import { voiceTurn } from '../src/voice';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -34,6 +35,12 @@ jest.mock('../src/native/NativeTasks', () => ({
     readSettings: jest.fn(),
     saveSettings: jest.fn(),
     finishVoiceTurn: jest.fn(),
+    chatgptStatus: jest.fn(async () => null),
+    chatgptSignIn: jest.fn(),
+    chatgptCancelSignIn: jest.fn(),
+    chatgptConnect: jest.fn(),
+    chatgptSignOut: jest.fn(),
+    chatgptRespond: jest.fn(),
   },
 }));
 
@@ -48,6 +55,7 @@ type StoredTurn = {
   status: string;
   detail: string | null;
   taskIds: string[];
+  owner?: string | null;
 };
 let turns: StoredTurn[];
 
@@ -98,21 +106,24 @@ beforeEach(() => {
       ),
     );
   jest.mocked(NativeTasks.readCheckpoint).mockResolvedValue(null);
-  jest.mocked(NativeTasks.startTurn).mockImplementation(async prompt => {
-    if (turns.some(turn => turn.status === 'RUNNING')) {
-      throw new Error('Finish the current prompt first.');
-    }
-    const id = String(turns.length + 1);
-    turns.push({
-      id,
-      prompt,
-      reply: null,
-      status: 'RUNNING',
-      detail: null,
-      taskIds: [],
+  jest
+    .mocked(NativeTasks.startTurn)
+    .mockImplementation(async (prompt, _attempt, owner) => {
+      if (turns.some(turn => turn.status === 'RUNNING')) {
+        throw new Error('Finish the current prompt first.');
+      }
+      const id = String(turns.length + 1);
+      turns.push({
+        id,
+        prompt,
+        owner,
+        reply: null,
+        status: 'RUNNING',
+        detail: null,
+        taskIds: [],
+      });
+      return id;
     });
-    return id;
-  });
   jest
     .mocked(NativeTasks.completeTurn)
     .mockImplementation(finish('COMPLETED', 'reply'));
@@ -139,7 +150,7 @@ async function connectCompanion(model: jest.Mock) {
     screen.getByRole('button', { name: 'Check connection' }),
   );
   await fireEvent.press(
-    screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+    screen.getByRole('checkbox', { name: 'Share earlier conversation' }),
   );
   return bridge;
 }
@@ -256,7 +267,7 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
       'a'.repeat(32),
     );
     await fireEvent.press(
-      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+      screen.getByRole('button', { name: 'Sign in on companion' }),
     );
     expect(
       screen.getByText(/Finish sign-in on the companion computer/),
@@ -292,6 +303,79 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
   }
 });
 
+test('signs in with ChatGPT on the phone and answers on that account', async () => {
+  jest.mocked(NativeTasks.chatgptSignIn).mockImplementation(async () => {
+    jest
+      .mocked(NativeTasks.chatgptStatus)
+      .mockResolvedValue(
+        JSON.stringify({ account: 'user-1', email: 'a@b.c', signedIn: true }),
+      );
+    return JSON.stringify({
+      account: 'user-1',
+      email: 'a@b.c',
+      contextWindow: 272_000,
+    });
+  });
+  jest.mocked(NativeTasks.chatgptRespond).mockResolvedValue(
+    JSON.stringify({
+      text: '[{"tool":"finish","message":"Hello from ChatGPT."}]',
+      inputTokens: 1200,
+    }),
+  );
+  jest.mocked(NativeTasks.chatgptSignOut).mockImplementation(async () => {
+    jest.mocked(NativeTasks.chatgptStatus).mockResolvedValue(null);
+    return 'false';
+  });
+  try {
+    await render(<App />);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    expect(screen.getByText('Signed in as a@b.c.')).toBeTruthy();
+    expect(screen.queryByLabelText('Companion pairing code')).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText('Agent prompt'), 'Hi');
+    await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
+    expect(screen.getByText('Hello from ChatGPT.')).toBeTruthy();
+    expect(NativeTasks.chatgptRespond).toHaveBeenCalledWith(
+      'user-1',
+      expect.any(String),
+      expect.stringContaining('"content":"Hi"'),
+      false,
+    );
+
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign out of ChatGPT' }),
+    );
+    expect(
+      screen.getByText(/Disconnect Android Agent in ChatGPT Settings/),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Agent prompt')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    ).toBeTruthy();
+  } finally {
+    jest.mocked(NativeTasks.chatgptStatus).mockResolvedValue(null);
+  }
+});
+
+test('reports a cancelled ChatGPT sign-in and stays signed out', async () => {
+  let fail!: (error: Error) => void;
+  jest
+    .mocked(NativeTasks.chatgptSignIn)
+    .mockImplementation(() => new Promise((_, reject) => (fail = reject)));
+  jest
+    .mocked(NativeTasks.chatgptCancelSignIn)
+    .mockImplementation(async () => fail(new Error('Sign-in was cancelled.')));
+  await render(<App />);
+  await fireEvent.press(
+    screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Cancel sign-in' }));
+  expect(screen.getByText('Sign-in was cancelled.')).toBeTruthy();
+  expect(screen.queryByLabelText('Agent prompt')).toBeNull();
+  expect(JSON.parse(storedSettings!).session).toBeUndefined();
+});
+
 test('pairing again keeps history local until sharing is enabled', async () => {
   const model = jest
     .fn()
@@ -315,6 +399,136 @@ test('pairing again keeps history local until sharing is enabled', async () => {
   } finally {
     bridge.mockRestore();
   }
+});
+
+describe('history without sharing', () => {
+  const respond = jest.mocked(NativeTasks.chatgptRespond);
+
+  function account(id: string) {
+    const connection = { account: id, email: `${id}@b.c`, contextWindow: null };
+    jest
+      .mocked(NativeTasks.chatgptStatus)
+      .mockResolvedValue(JSON.stringify({ ...connection, signedIn: true }));
+    return JSON.stringify(connection);
+  }
+
+  function lastInput() {
+    return JSON.parse(respond.mock.calls.at(-1)![2]);
+  }
+
+  beforeEach(() => {
+    respond.mockReset();
+    respond.mockImplementation(async (_, __, input) =>
+      JSON.stringify({
+        text: JSON.stringify([
+          {
+            tool: 'finish',
+            message: `Re: ${JSON.parse(input).at(-1).content}`,
+          },
+        ]),
+        inputTokens: null,
+      }),
+    );
+    jest
+      .mocked(NativeTasks.chatgptSignIn)
+      .mockImplementation(async () => account('user-1'));
+    jest
+      .mocked(NativeTasks.chatgptConnect)
+      .mockImplementation(async () => account('user-1'));
+    jest.mocked(NativeTasks.chatgptSignOut).mockImplementation(async () => {
+      jest.mocked(NativeTasks.chatgptStatus).mockResolvedValue(null);
+      return 'true';
+    });
+  });
+
+  afterEach(() => {
+    jest.mocked(NativeTasks.chatgptStatus).mockResolvedValue(null);
+  });
+
+  test('a voice follow-up continues a typed turn but not turns saved before', async () => {
+    turns = [
+      {
+        id: '1',
+        prompt: 'Local only',
+        reply: 'Kept here.',
+        status: 'COMPLETED',
+        detail: null,
+        taskIds: [],
+      },
+    ];
+    await render(<App />);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Share earlier conversation' }).props
+        .accessibilityState.checked,
+    ).toBe(false);
+    await ask('Can you see my screen?');
+    await act(() => voiceTurn({ id: 'voice-1', transcript: 'And now?' }));
+
+    expect(lastInput()).toEqual([
+      { role: 'user', content: 'Can you see my screen?' },
+      { role: 'assistant', content: 'Re: Can you see my screen?' },
+      { role: 'user', content: 'And now?' },
+    ]);
+  });
+
+  test("keeps an account's turns across a restart and reconnect, never for another account", async () => {
+    const mounted = await render(<App />);
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    await ask('My dog is Rex.');
+    respond.mockRejectedValueOnce(new Error('Network down.'));
+    await ask('Hello');
+    expect(JSON.parse(storedSettings!).session).toBeUndefined();
+    const companionModel = jest
+      .fn()
+      .mockResolvedValue('[{"tool":"finish","message":"Companion reply."}]');
+    const bridge = await connectCompanion(companionModel);
+    try {
+      await fireEvent.press(
+        screen.getByRole('checkbox', { name: 'Share earlier conversation' }),
+      );
+      await ask('Companion-only prompt');
+      companionModel.mockRejectedValueOnce(
+        new Error('Companion disconnected.'),
+      );
+      await ask('Disconnect');
+    } finally {
+      bridge.mockRestore();
+    }
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Continue with ChatGPT' }),
+    );
+    await mounted.unmount();
+
+    await render(<App />);
+    await ask('What is my dog called?');
+    expect(lastInput()).toEqual([
+      { role: 'user', content: 'My dog is Rex.' },
+      { role: 'assistant', content: 'Re: My dog is Rex.' },
+      { role: 'user', content: 'What is my dog called?' },
+    ]);
+
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign out of ChatGPT' }),
+    );
+    jest
+      .mocked(NativeTasks.chatgptSignIn)
+      .mockImplementation(async () => account('user-2'));
+    await fireEvent.press(
+      screen.getByRole('button', { name: 'Sign in with ChatGPT' }),
+    );
+    await ask('Who am I?');
+    expect(respond).toHaveBeenLastCalledWith(
+      'user-2',
+      expect.any(String),
+      JSON.stringify([{ role: 'user', content: 'Who am I?' }]),
+      false,
+    );
+  });
 });
 
 test('saves the prompt before inference and sends completed turns with a follow-up', async () => {
@@ -380,9 +594,9 @@ test('a remounted screen shows the reply when an in-flight prompt settles', asyn
   const start = jest.mocked(NativeTasks.startTurn);
   const insert = start.getMockImplementation()!;
   start.mockImplementationOnce(
-    (prompt, attempt) =>
+    (prompt, attempt, owner) =>
       new Promise(resolve => {
-        commitPrompt = () => resolve(insert(prompt, attempt));
+        commitPrompt = () => resolve(insert(prompt, attempt, owner));
       }),
   );
   const mounted = await render(<App />);
@@ -559,7 +773,7 @@ describe('idle compaction', () => {
       screen.getByRole('button', { name: 'Check connection' }),
     );
     await fireEvent.press(
-      screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+      screen.getByRole('checkbox', { name: 'Share earlier conversation' }),
     );
     return bridge;
   }
@@ -633,7 +847,7 @@ describe('idle compaction', () => {
       'sharing is turned off',
       () =>
         fireEvent.press(
-          screen.getByRole('checkbox', { name: 'Share saved conversation' }),
+          screen.getByRole('checkbox', { name: 'Share earlier conversation' }),
         ),
     ],
     [

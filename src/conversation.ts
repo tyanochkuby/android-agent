@@ -11,6 +11,7 @@ export type Turn = {
   status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED';
   detail: string | null;
   tasks: Task[];
+  owner?: string | null;
 };
 
 type StoredTurn = Omit<Turn, 'tasks'> & { taskIds: string[] };
@@ -42,9 +43,22 @@ export const conversation = {
       }),
     );
   },
+  // ID of the newest saved turn, or null for an empty journal.
+  async latestId() {
+    const [latest] = await readTurns(1);
+    return latest?.id ?? null;
+  },
+  // Returns model input from the newest completed turns after `since` that fit the history
+  // budget, without the checkpoint, which may cover earlier turns.
+  async since(since: string | null, budget: ContextBudget, owner: string) {
+    return prefix(
+      null,
+      await newest(null, budget.historyTokens, budget, since, owner),
+    );
+  },
   // Saves the prompt as a running turn and returns its ID.
-  start: (prompt: string, attempt: string) =>
-    NativeTasks.startTurn(prompt, attempt),
+  start: (prompt: string, attempt: string, owner: string | null) =>
+    NativeTasks.startTurn(prompt, attempt, owner),
   // Returns model input from completed turns: the checkpoint, then exact turns after its coverage.
   // Past `budget.compactAt` estimated tokens it first summarizes that input through `model` and
   // switches to the saved summary.
@@ -134,21 +148,25 @@ async function uncovered(
   }
 }
 
-// Reads the newest completed turns after the checkpoint that fit in `limit` tokens, oldest first.
+// Reads the newest completed turns after `after` that fit in `limit` tokens with the checkpoint,
+// oldest first.
 async function newest(
   checkpoint: Checkpoint | null,
   limit: number,
   budget: ContextBudget,
+  after = checkpoint?.covers ?? null,
+  owner?: string,
 ) {
   const turns: Completed[] = [];
   let before: string | null = null;
   for (;;) {
     const page = await readTurns(20, before);
     for (const turn of page) {
-      if (checkpoint && BigInt(turn.id) <= BigInt(checkpoint.covers)) {
+      if (after !== null && BigInt(turn.id) <= BigInt(after)) {
         return turns;
       }
-      if (turn.status !== 'COMPLETED') continue;
+      if (turn.status !== 'COMPLETED' || (owner && turn.owner !== owner))
+        continue;
       if (!fits(prefix(checkpoint, [turn, ...turns]), limit, budget)) {
         return turns;
       }
