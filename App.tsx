@@ -36,7 +36,8 @@ export default function App() {
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
   const [history, setHistory] = useState<Turn[]>([]);
-  const [earlier, setEarlier] = useState(false);
+  const [olderPage, setOlderPage] = useState<boolean | null>(null);
+  const earlier = olderPage ?? history.length >= historyPage;
   const revision = useRef(0);
   const historyRead = useRef(0);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
@@ -70,8 +71,8 @@ export default function App() {
     const read = before === null ? ++historyRead.current : historyRead.current;
     const page = await conversation.read(historyPage, before);
     if (before === null && read !== historyRead.current) return;
-    if (before !== null || page.length === historyPage) {
-      setEarlier(page.length === historyPage);
+    if (before !== null) {
+      setOlderPage(page.length === historyPage);
     }
     setHistory(current => {
       if (before !== null) {

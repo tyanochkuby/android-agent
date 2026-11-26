@@ -41,8 +41,6 @@ internal object VoiceTurns {
     // Allowed in the foreground because Android Agent's own screen may be open; the JS side reports it busy.
     val task = HeadlessJsTaskConfig("VoiceTurn", data, isAllowedInForeground = true)
     val host = checkNotNull((context.applicationContext as ReactApplication).reactHost)
-    val running = host.currentReactContext
-    if (running != null) return run(id, running, task)
     val startup = host.start()
     thread(name = "VoiceTurnStartup") {
       val ready = runCatching {
@@ -50,7 +48,7 @@ internal object VoiceTurns {
           !startup.isCancelled() && !startup.isFaulted()
       }.getOrDefault(false)
       UiThreadUtil.runOnUiThread {
-        val reactContext = if (ready) host.currentReactContext else null
+        val reactContext = if (ready) host.currentReactContext?.takeIf { it.hasActiveReactInstance() } else null
         if (reactContext == null) finish(id, "Android Agent could not start. Try again.", true)
         else run(id, reactContext, task)
       }
