@@ -2,13 +2,14 @@ package io.github.tyanochkuby.androidagent.assistant
 
 import android.content.Context
 import com.facebook.react.ReactApplication
-import com.facebook.react.ReactInstanceEventListener
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
 import com.facebook.react.jstasks.HeadlessJsTaskContext
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * Hands a final transcript to the shared React Native runtime as the `VoiceTurn` headless task, starting the runtime
@@ -32,13 +33,18 @@ internal object VoiceTurns {
     val host = checkNotNull((context.applicationContext as ReactApplication).reactHost)
     val running = host.currentReactContext
     if (running != null) return run(running, task)
-    host.addReactInstanceEventListener(object : ReactInstanceEventListener {
-      override fun onReactContextInitialized(context: ReactContext) {
-        host.removeReactInstanceEventListener(this)
-        UiThreadUtil.runOnUiThread { run(context, task) }
+    val startup = host.start()
+    thread(name = "VoiceTurnStartup") {
+      val ready = runCatching {
+        startup.waitForCompletion(30, TimeUnit.SECONDS) &&
+          !startup.isCancelled() && !startup.isFaulted()
+      }.getOrDefault(false)
+      UiThreadUtil.runOnUiThread {
+        val reactContext = if (ready) host.currentReactContext else null
+        if (reactContext == null) finish(id, "Android Agent could not start. Try again.", true)
+        else run(reactContext, task)
       }
-    })
-    host.start()
+    }
   }
 
   private fun run(context: ReactContext, task: HeadlessJsTaskConfig) {

@@ -40,6 +40,7 @@ export default function App() {
   const revision = useRef(0);
   const historyRead = useRef(0);
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const lastScrolledTurn = useRef<string | undefined>(undefined);
   const states = Object.values(task?.states ?? {});
   const running = states.some(
     ({ phase }) => phase === 'QUEUED' || phase === 'RUNNING',
@@ -266,7 +267,13 @@ export default function App() {
           <ScrollView
             ref={scroll}
             contentContainerStyle={styles.content}
-            onContentSizeChange={() => scroll.current?.scrollToEnd()}
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+            onContentSizeChange={() => {
+              const newest = history[0]?.id;
+              if (lastScrolledTurn.current === newest) return;
+              lastScrolledTurn.current = newest;
+              scroll.current?.scrollToEnd();
+            }}
           >
             <Text style={styles.brand}>Android Agent</Text>
             <View style={styles.panel}>
