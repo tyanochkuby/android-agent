@@ -101,7 +101,14 @@ class AssistantService : VoiceInteractionService() {
     private val screenOff = object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) = finish(null)
     }
-    private val captureStart = Any()
+    private val captureLock = Any()
+    private var activeRecorder: AudioRecord? = null
+    private val frameTimeout = Runnable {
+      if (listening === this) {
+        Log.i(TAG, "overlayFrameTimeout")
+        finish(null)
+      }
+    }
     @Volatile private var cancelled = false
     @Volatile private var silenced = false
     private var readyAt: Long? = null
@@ -109,12 +116,15 @@ class AssistantService : VoiceInteractionService() {
     init {
       registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
       transcriber.prepare()
+      main.postDelayed(frameTimeout, 1_000)
+      // Wait for the first frame to be submitted to the swap chain.
       dot.viewTreeObserver.registerFrameCommitCallback {
         if (listening === this) startCapture()
       }
     }
 
     private fun startCapture() {
+      main.removeCallbacks(frameTimeout)
       micBusy = true
       thread(name = "AssistantMic") {
         try {
@@ -131,7 +141,11 @@ class AssistantService : VoiceInteractionService() {
 
     /** Cancels pending capture and discards any late result. */
     fun release() {
-      synchronized(captureStart) { cancelled = true }
+      main.removeCallbacks(frameTimeout)
+      synchronized(captureLock) {
+        cancelled = true
+        activeRecorder?.let { recorder -> runCatching { recorder.stop() } }
+      }
       unregisterReceiver(screenOff)
     }
 
@@ -152,9 +166,10 @@ class AssistantService : VoiceInteractionService() {
             }
           })
         }
-        synchronized(captureStart) {
+        synchronized(captureLock) {
           if (cancelled) return
           record.startRecording()
+          activeRecorder = record
         }
         if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) return fail(SpeechRecognizer.ERROR_AUDIO)
 
@@ -175,13 +190,15 @@ class AssistantService : VoiceInteractionService() {
           recorded += read
           if (endpointer.lastVoicedFrame == frame++) lastVoicedAt = now
           if (endpoint == null) continue
-          record.stop()
           val speech = audio.copyOf(minOf(recorded, (endpointer.lastVoicedFrame + 1) * FRAME_SAMPLES + TRAILING_SAMPLES))
           main.post { onEndpoint(endpoint, speech, lastVoicedAt, now) }
           return
         }
       } finally {
-        record.release()
+        synchronized(captureLock) {
+          activeRecorder = null
+          record.release()
+        }
       }
     }
 
