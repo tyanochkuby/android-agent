@@ -191,6 +191,14 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
       try {
         dispatch(account, session)
       } catch (_: Unauthorized) {
+        withContext(NonCancellable) {
+          lock.withLock {
+            val saved = vault.read()
+            if (saved.subject == account.subject && saved.session == session) {
+              vault.write(saved.copy(session = null, reauthRequired = true))
+            }
+          }
+        }
         throw ChatGPTException("unauthorized", "ChatGPT did not accept this sign-in. Sign in with ChatGPT again.")
       }
     }
