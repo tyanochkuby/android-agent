@@ -45,6 +45,7 @@ import kotlin.math.roundToInt
 /** Makes Android Agent eligible for the default digital assistant role and owns the listening dot across session hides. */
 class AssistantService : VoiceInteractionService() {
   private var overlay: View? = null
+  private var micBusy = false
   private var listening: Utterance? = null
   private var preparedAt: Long? = null
 
@@ -65,6 +66,7 @@ class AssistantService : VoiceInteractionService() {
     val invokedAt = preparedAt ?: SystemClock.elapsedRealtime()
     preparedAt = null
     if (listening != null) return finish(null)
+    if (micBusy) return
     removeOverlay()
     val unlocked = !getSystemService(KeyguardManager::class.java).isKeyguardLocked
     if (!unlocked || !getSystemService(PowerManager::class.java).isInteractive) return
@@ -79,7 +81,8 @@ class AssistantService : VoiceInteractionService() {
       startActivity(Intent(this, MicrophonePermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       return
     }
-    listening = Utterance(invokedAt, cold = !transcriber.loaded)
+    val dot = showDot(Color.GRAY) ?: return
+    listening = Utterance(invokedAt, cold = !transcriber.loaded, dot = dot)
   }
 
   private fun finish(card: String?) {
@@ -93,28 +96,34 @@ class AssistantService : VoiceInteractionService() {
    * One offline utterance. The mic thread records until [Endpointer] ends it, then the transcriber decodes the audio.
    * Audio and transcripts stay in memory and on screen; logs carry only timings and error codes. Every terminal path calls [finish].
    */
-  private inner class Utterance(private val invokedAt: Long, private val cold: Boolean) {
+  private inner class Utterance(private val invokedAt: Long, private val cold: Boolean, private val dot: View) {
     private val main = Handler(Looper.getMainLooper())
-    private val dot = showDot(Color.GRAY)
     private val screenOff = object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) = finish(null)
     }
     @Volatile private var cancelled = false
     @Volatile private var silenced = false
     private var readyAt: Long? = null
-    private val mic: Thread
 
     init {
       registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
       transcriber.prepare()
-      mic = thread(name = "AssistantMic") { record() }
+      micBusy = true
+      thread(name = "AssistantMic") {
+        try {
+          if (!cancelled) record()
+        } catch (_: IllegalStateException) {
+          fail(SpeechRecognizer.ERROR_AUDIO)
+        } finally {
+          main.post { micBusy = false }
+        }
+      }
     }
 
     /** Stops recording or decoding. The mic thread releases the AudioRecord within one frame. */
     fun release() {
       cancelled = true
       unregisterReceiver(screenOff)
-      mic.join(MIC_RELEASE_TIMEOUT_MS)
     }
 
     private fun record() {
@@ -167,7 +176,7 @@ class AssistantService : VoiceInteractionService() {
     private fun onReady(at: Long) {
       if (listening !== this) return
       readyAt = at
-      (dot?.background as? GradientDrawable)?.setColor(LISTENING)
+      (dot.background as? GradientDrawable)?.setColor(LISTENING)
     }
 
     private fun onEndpoint(endpoint: Endpoint, speech: FloatArray, lastVoicedAt: Long, endpointAt: Long) {
@@ -176,7 +185,7 @@ class AssistantService : VoiceInteractionService() {
         Log.i(TAG, "noSpeech cold=$cold invocationToReadyMs=${readyAt?.minus(invokedAt)}")
         return finish(null)
       }
-      (dot?.background as? GradientDrawable)?.setColor(Color.GRAY)
+      (dot.background as? GradientDrawable)?.setColor(Color.GRAY)
       transcriber.transcribe(speech, { cancelled }) { transcript -> main.post { onTranscript(transcript, endpoint, speech.size, lastVoicedAt, endpointAt) } }
     }
 
@@ -315,7 +324,6 @@ class AssistantService : VoiceInteractionService() {
     private const val FRAME_SAMPLES = Transcriber.SAMPLE_RATE * Endpointer.FRAME_MS / 1000
     private const val MAX_SAMPLES = Transcriber.SAMPLE_RATE * 15
     private const val TRAILING_SAMPLES = Transcriber.SAMPLE_RATE / 5
-    private const val MIC_RELEASE_TIMEOUT_MS = 200L
     private var active: AssistantService? = null
 
     /** Called by the session on every invocation. A second invocation while listening cancels the utterance. */

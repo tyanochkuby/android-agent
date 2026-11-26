@@ -32,7 +32,7 @@ class ParakeetSmokeTest {
         val decodeMs = SystemClock.elapsedRealtime() - start
         val expected = runCatching { samples.open(name.replace(".wav", ".txt")).reader().readText() }.getOrNull()
         val wer = expected?.let { "%.2f".format(wordErrorRate(it, transcript)) }
-        Log.i(TAG, "round=$round $name cold=$cold audioMs=${audio.size * 1000 / Transcriber.SAMPLE_RATE} decodeMs=$decodeMs wer=$wer text=${transcript}")
+        Log.i(TAG, "round=$round $name cold=$cold audioMs=${audio.size * 1000 / Transcriber.SAMPLE_RATE} decodeMs=$decodeMs wer=$wer")
         assertTrue(name, transcript.isNotBlank())
       }
     } finally {
