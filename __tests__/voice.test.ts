@@ -130,6 +130,7 @@ test('answers on the ChatGPT account signed in on the phone', async () => {
     'user-1',
     expect.any(String),
     expect.stringContaining('"content":"Hello"'),
+    false,
   );
   expect(NativeTasks.finishVoiceTurn).toHaveBeenCalledWith(
     'voice-6',

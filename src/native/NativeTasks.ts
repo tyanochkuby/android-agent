@@ -40,6 +40,7 @@ export interface Spec extends TurboModule {
     account: string,
     instructions: string,
     input: string,
+    shareHistory: boolean,
   ): Promise<string>;
   finishVoiceTurn(id: string, text: string, failed: boolean): Promise<void>;
 }

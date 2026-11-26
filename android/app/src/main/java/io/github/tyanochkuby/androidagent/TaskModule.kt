@@ -15,6 +15,10 @@ import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import io.github.tyanochkuby.androidagent.tasks.TaskRequest
 import io.github.tyanochkuby.androidagent.tasks.taskJson
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -141,12 +145,25 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     chatgpt.signOut().toString()
   }
 
-  override fun chatgptRespond(account: String, instructions: String, input: String, promise: Promise) = respond(promise) {
-    val reply = chatgpt.respond(account, instructions, input)
+  override fun chatgptRespond(
+    account: String, instructions: String, input: String, shareHistory: Boolean, promise: Promise,
+  ) = respond(promise) {
+    val reply = chatgpt.respond(account, instructions, input) {
+      !shareHistory || canShareHistory(account)
+    }
     buildJsonObject {
       put("text", reply.text)
       put("inputTokens", reply.inputTokens)
     }.toString()
+  }
+
+  private fun canShareHistory(account: String): Boolean {
+    val saved = preferences.getString(SETTINGS, null) ?: return false
+    val config = taskJson.parseToJsonElement(saved).jsonObject
+    if (config["shareHistory"]?.jsonPrimitive?.booleanOrNull != true) return false
+    val session = config["session"]?.jsonObject ?: return false
+    return session["chatgpt"]?.jsonPrimitive?.booleanOrNull == true &&
+      session["id"]?.jsonPrimitive?.contentOrNull == account
   }
 
   override fun finishVoiceTurn(id: String, text: String, failed: Boolean, promise: Promise) = respond(promise) {

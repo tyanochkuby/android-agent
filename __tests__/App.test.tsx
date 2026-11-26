@@ -340,6 +340,7 @@ test('signs in with ChatGPT on the phone and answers on that account', async () 
       'user-1',
       expect.any(String),
       expect.stringContaining('"content":"Hi"'),
+      false,
     );
 
     await fireEvent.press(
@@ -525,6 +526,7 @@ describe('history without sharing', () => {
       'user-2',
       expect.any(String),
       JSON.stringify([{ role: 'user', content: 'Who am I?' }]),
+      false,
     );
   });
 });

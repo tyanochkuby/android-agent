@@ -193,7 +193,7 @@ export default function App() {
     const compactWhenIdle = () =>
       compactor.start(signal =>
         conversation.compactIdle(
-          connectedModel(pairingCode, live, undefined, signal),
+          connectedModel(pairingCode, live, undefined, signal, true),
           budget,
           signal,
         ),

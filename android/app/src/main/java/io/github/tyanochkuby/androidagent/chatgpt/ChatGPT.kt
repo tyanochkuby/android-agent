@@ -81,13 +81,18 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
    * Answers `input` for `subject`, which must still be the signed-in account.
    * Returns null input tokens when the reply did not report usage.
    */
-  suspend fun respond(subject: String, instructions: String, input: String): Reply = authorized { account, token ->
+  suspend fun respond(
+    subject: String, instructions: String, input: String, canSendHistory: () -> Boolean,
+  ): Reply = authorized { account, token ->
     if (account.subject != subject) {
       throw ChatGPTException("account_changed", "The ChatGPT account changed. Continue with ChatGPT again.")
     }
     val model = account.model ?: throw ChatGPTException("not_connected", "Continue with ChatGPT in Android Agent.")
     val body = responsesBody(model, instructions, Json.parseToJsonElement(input) as JsonArray)
     withContext(Dispatchers.IO) {
+      if (!canSendHistory()) {
+        throw ChatGPTException("history_sharing_off", "Sharing earlier conversation is off.")
+      }
       request("$RESOURCE/responses", token, body) { readResponseStream(it.inputStream.bufferedReader()) }
     }
   }
@@ -228,6 +233,10 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
       throw error
     }
     val tokens = tokens(result.body as? JsonObject ?: JsonObject(emptyMap()), clock(), session.scopes)
+    if (SHARING_SCOPE !in tokens.scopes) {
+      vault.write(account.copy(session = null, reauthRequired = true))
+      throw ChatGPTException("plan_usage_declined", "Allow ChatGPT plan usage when you sign in.")
+    }
     val next = Session(tokens.accessToken, tokens.refreshToken, tokens.expiresAt, tokens.earliestRefreshAt, tokens.scopes)
     tokens.idToken?.let { idToken ->
       // Rotation spends the previous refresh token. Require a fresh sign-in if verification fails.

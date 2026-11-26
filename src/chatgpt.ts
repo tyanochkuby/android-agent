@@ -43,6 +43,7 @@ export const chatgpt = {
     account: string,
     onUsage?: (inputTokens: number | undefined) => void,
     signal?: AbortSignal,
+    shareHistory = false,
   ): Model {
     return async (instructions, input) => {
       if (signal?.aborted) throw new Error('The request was cancelled.');
@@ -51,6 +52,7 @@ export const chatgpt = {
           account,
           instructions,
           JSON.stringify(input),
+          shareHistory,
         ),
       );
       if (signal?.aborted) throw new Error('The request was cancelled.');

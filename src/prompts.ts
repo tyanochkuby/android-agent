@@ -61,8 +61,9 @@ export function connectedModel(
   session: Session,
   onUsage?: (inputTokens: number | undefined) => void,
   live?: AbortSignal,
+  shareHistory = false,
 ): Model {
-  if (session.chatgpt) return chatgpt.model(session.id, onUsage, live);
+  if (session.chatgpt) return chatgpt.model(session.id, onUsage, live, shareHistory);
   const bridge = companion(pairingCode.trim(), session.id, onUsage);
   return live ? bridge.liveModel(live) : bridge.model;
 }
@@ -119,7 +120,13 @@ export async function ask(
       throw new Error('Sign in with ChatGPT in Android Agent.');
     }
     const budget = contextBudget(session.contextWindow);
-    const model = connectedModel(config.pairingCode, session, compactor.report);
+    const model = connectedModel(
+      config.pairingCode,
+      session,
+      compactor.report,
+      undefined,
+      shareHistory,
+    );
     outcome = {
       reply: await runAgent(
         message,
