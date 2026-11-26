@@ -86,6 +86,10 @@ class AssistantService : VoiceInteractionService() {
       ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       return
     }
+    if (!speechModel.installed) {
+      showCard(getString(R.string.speech_model_required))
+      return
+    }
     if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
       startActivity(Intent(this, MicrophonePermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       return
@@ -389,8 +393,9 @@ class AssistantService : VoiceInteractionService() {
     if (listening == null) transcriberOrNull?.evict()
   }
 
+  private val speechModel by lazy { SpeechModel(this) }
   private var transcriberOrNull: Transcriber? = null
-  private val transcriber get() = transcriberOrNull ?: Transcriber(assets).also { transcriberOrNull = it }
+  private val transcriber get() = transcriberOrNull ?: Transcriber(speechModel.directory).also { transcriberOrNull = it }
 
   private fun closeTranscriber() {
     transcriberOrNull?.close()

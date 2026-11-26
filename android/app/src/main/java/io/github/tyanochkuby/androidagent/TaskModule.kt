@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import io.github.tyanochkuby.androidagent.assistant.SpeechModel
 import io.github.tyanochkuby.androidagent.assistant.VoiceTurns
 import io.github.tyanochkuby.androidagent.tasks.Phase
 import io.github.tyanochkuby.androidagent.tasks.UiSession
@@ -117,6 +118,19 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
 
   override fun saveSettings(settings: String, promise: Promise) = respond(promise) {
     check(preferences.edit().putString(SETTINGS, settings).commit()) { "Could not save the settings." }
+    null
+  }
+
+  private val speechModel by lazy { SpeechModel(application) }
+
+  override fun speechModelStatus(promise: Promise) = respond(promise) {
+    if (!context.resources.getBoolean(R.bool.assistant_prototype_enabled)) null
+    else if (speechModel.installed) "ready" else "missing"
+  }
+
+  override fun installSpeechModel(promise: Promise) = respond(promise) {
+    check(context.resources.getBoolean(R.bool.assistant_prototype_enabled))
+    speechModel.install()
     null
   }
 

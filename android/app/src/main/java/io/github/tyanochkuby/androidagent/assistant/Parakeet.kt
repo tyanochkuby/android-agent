@@ -1,6 +1,6 @@
 package io.github.tyanochkuby.androidagent.assistant
 
-import android.content.res.AssetManager
+import java.io.File
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
@@ -9,7 +9,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /** Keeps model initialization, decoding and eviction on the same worker. */
-internal class Transcriber(private val assets: AssetManager) {
+internal class Transcriber(private val directory: File) {
   private val worker = ScheduledThreadPoolExecutor(1).apply {
     removeOnCancelPolicy = true
     executeExistingDelayedTasksAfterShutdownPolicy = false
@@ -62,15 +62,15 @@ internal class Transcriber(private val assets: AssetManager) {
   }
 
   private fun load() = recognizer ?: OfflineRecognizer(
-    assets,
+    null,
     OfflineRecognizerConfig(
       modelConfig = OfflineModelConfig(
         transducer = OfflineTransducerModelConfig(
-          encoder = "$MODEL/encoder.int8.onnx",
-          decoder = "$MODEL/decoder.int8.onnx",
-          joiner = "$MODEL/joiner.int8.onnx",
+          encoder = "$directory/encoder.int8.onnx",
+          decoder = "$directory/decoder.int8.onnx",
+          joiner = "$directory/joiner.int8.onnx",
         ),
-        tokens = "$MODEL/tokens.txt",
+        tokens = "$directory/tokens.txt",
         modelType = "nemo_transducer",
         numThreads = 4,
       ),
@@ -79,6 +79,5 @@ internal class Transcriber(private val assets: AssetManager) {
 
   companion object {
     const val SAMPLE_RATE = 16_000
-    private const val MODEL = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
   }
 }
