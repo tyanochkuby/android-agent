@@ -229,13 +229,14 @@ export default function App() {
     return handle(async () => {
       compactor.report(undefined);
       const code = pairingCode.trim();
-      await settings.save({ pairingCode, shareHistory: false });
+      await settings.save({ pairingCode, shareHistory: false, scope: config.scope });
       const bridge = companion(code);
       const connection = await (signIn ? bridge.signIn() : bridge.check());
       if (connection.ready && connection.sessionId) {
         await settings.save({
           pairingCode,
           shareHistory: false,
+          scope: config.scope,
           session: {
             id: connection.sessionId,
             contextWindow: connection.contextWindow ?? null,

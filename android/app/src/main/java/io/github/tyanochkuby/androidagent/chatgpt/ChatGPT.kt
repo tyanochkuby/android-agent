@@ -224,21 +224,18 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
     }
     val tokens = tokens(result.body as? JsonObject ?: JsonObject(emptyMap()), clock(), session.scopes)
     val next = Session(tokens.accessToken, tokens.refreshToken, tokens.expiresAt, tokens.earliestRefreshAt, tokens.scopes)
-    // The old refresh token is spent, so the rotated one is saved before anything else can fail.
-    val updated = account.copy(session = next)
-    vault.write(updated)
     tokens.idToken?.let { idToken ->
-      val identity = runCatching {
-        verifyIdToken(idToken, get(JWKS_URL, null) as? JsonObject ?: JsonObject(emptyMap()), clientId, null, clock())
-      }.getOrElse { error ->
-        if (error is ChatGPTException && error.retryable) throw error
-        null
-      }
-      if (identity?.subject != account.subject) {
-        vault.write(account.copy(session = null, reauthRequired = true))
+      // Rotation spends the previous refresh token. Require a fresh sign-in if verification fails.
+      vault.write(account.copy(session = null, reauthRequired = true))
+      val identity = verifyIdToken(
+        idToken, get(JWKS_URL, null) as? JsonObject ?: JsonObject(emptyMap()), clientId, null, clock(),
+      )
+      if (identity.subject != account.subject) {
         throw ChatGPTException("account_mismatch", "The ChatGPT identity changed. Sign in to the original account again.")
       }
     }
+    val updated = account.copy(session = next)
+    vault.write(updated)
     return updated to next
   }
 
