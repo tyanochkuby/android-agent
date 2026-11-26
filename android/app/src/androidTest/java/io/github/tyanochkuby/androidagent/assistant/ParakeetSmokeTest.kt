@@ -6,11 +6,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Decodes every `<language>-<name>.wav` test asset with the bundled model, twice, so the log shows cold and warm decode times.
+ * Decodes every `<language>-<name>.wav` test asset with the installed model, twice, so the log shows cold and warm decode times.
  * Generate the assets with scripts/speech-samples.sh. Read results with `adb logcat -s ParakeetSmoke`.
  * Asserts a nonempty transcript; word error rate against the optional `.txt` is logged for comparison, not asserted.
  */
@@ -22,7 +23,9 @@ class ParakeetSmokeTest {
   fun transcribesSamples() {
     val names = samples.list("")!!.filter { it.endsWith(".wav") }.sorted()
     assertTrue("No samples. Run android/scripts/speech-samples.sh first.", names.isNotEmpty())
-    val transcriber = Transcriber(instrumentation.targetContext.assets)
+    val model = SpeechModel(instrumentation.targetContext)
+    runBlocking { model.install() }
+    val transcriber = Transcriber(model.directory)
     try {
       for (round in 1..2) for (name in names) {
         val audio = readWav(name)

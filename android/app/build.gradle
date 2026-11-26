@@ -9,9 +9,7 @@ react {
     debuggableVariants = project.hasProperty("bundleJs") ? [] : ["debug"]
 }
 
-def modelName = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 def speechBuild = layout.buildDirectory.dir("parakeet").get().asFile
-def modelAssets = new File(speechBuild, "assets")
 def sherpaAar = new File(speechBuild, "sherpa-onnx-2.0.3.aar")
 
 def downloadSpeechArtifact = { File file, String url, String checksum ->
@@ -44,24 +42,6 @@ def downloadSherpa = tasks.register("downloadSherpa") {
     }
 }
 
-def modelArchive = new File(speechBuild, "model.tar.bz2")
-def downloadParakeet = tasks.register("downloadParakeet") {
-    outputs.file(modelArchive)
-    doLast {
-        downloadSpeechArtifact(modelArchive,
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${modelName}.tar.bz2",
-            "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9")
-    }
-}
-
-def prepareParakeet = tasks.register("prepareParakeet", Sync) {
-    dependsOn downloadParakeet
-    from({ tarTree(resources.bzip2(modelArchive)) }) {
-        include "${modelName}/*.onnx", "${modelName}/tokens.txt", "${modelName}/LICENSE*"
-    }
-    into modelAssets
-}
-
 android {
     namespace "io.github.tyanochkuby.androidagent"
     ndkVersion rootProject.ext.ndkVersion
@@ -77,21 +57,16 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    androidResources {
-        noCompress "onnx"
-    }
-
     sourceSets {
-        main.assets.srcDir(modelAssets)
         // Written by scripts/speech-samples.sh for ParakeetSmokeTest.
         androidTest.assets.srcDir(layout.buildDirectory.dir("generated/speech-samples").get().asFile)
     }
 }
 
-preBuild.dependsOn prepareParakeet
 
 dependencies {
     implementation(files(sherpaAar).builtBy(downloadSherpa))
+    implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

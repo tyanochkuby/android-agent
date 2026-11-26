@@ -35,6 +35,7 @@ jest.mock('../src/native/NativeTasks', () => ({
     readSettings: jest.fn(),
     saveSettings: jest.fn(),
     finishVoiceTurn: jest.fn(),
+    speechModelStatus: jest.fn(async () => null),
     chatgptStatus: jest.fn(async () => null),
     chatgptSignIn: jest.fn(),
     chatgptCancelSignIn: jest.fn(),

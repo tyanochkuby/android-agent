@@ -31,6 +31,8 @@ export interface Spec extends TurboModule {
   openAccessibilitySettings(): Promise<void>;
   readSettings(): Promise<string | null>;
   saveSettings(settings: string): Promise<void>;
+  speechModelStatus(): Promise<string | null>;
+  installSpeechModel(): Promise<void>;
   chatgptStatus(): Promise<string | null>;
   chatgptSignIn(): Promise<string>;
   chatgptCancelSignIn(): Promise<void>;

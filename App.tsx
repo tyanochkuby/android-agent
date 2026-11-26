@@ -29,6 +29,7 @@ import {
   recoverChatGPTConnection,
 } from './src/prompts';
 import { emptySettings, settings } from './src/settings';
+import NativeTasks from './src/native/NativeTasks';
 import type { Settings } from './src/settings';
 
 const historyPage = 20;
@@ -42,6 +43,8 @@ export default function App() {
   const { pairingCode, session, shareHistory } = config;
   const connected = session !== undefined;
   const [account, setAccount] = useState<Account | null>(null);
+  const [speechModel, setSpeechModel] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState('');
   const [signingIn, setSigningIn] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
@@ -102,6 +105,9 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    NativeTasks.speechModelStatus()
+      .then(saved => active && setSpeechModel(saved))
+      .catch(() => {});
     const unsubscribeSettings = settings.subscribe(setConfig);
     settings
       .read()
@@ -272,6 +278,20 @@ export default function App() {
     });
   }
 
+  async function downloadSpeechModel() {
+    setSpeechError('');
+    setSpeechModel('downloading');
+    try {
+      await NativeTasks.installSpeechModel();
+      setSpeechModel('ready');
+    } catch (error) {
+      setSpeechError(
+        error instanceof Error ? error.message : 'Download failed. Try again.',
+      );
+      setSpeechModel('missing');
+    }
+  }
+
   function signInWithChatGPT() {
     return handle(async () => {
       compactor.report(undefined);
@@ -359,6 +379,29 @@ export default function App() {
             }}
           >
             <Text style={styles.brand}>Android Agent</Text>
+            {speechModel !== null && speechModel !== 'ready' && (
+              <View style={styles.panel}>
+                <Text style={styles.description}>
+                  Download 487 MB once to use voice recognition offline. Setup
+                  needs 1.2 GB of free space.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  style={styles.secondary}
+                  disabled={speechModel === 'downloading'}
+                  onPress={downloadSpeechModel}
+                >
+                  <Text style={styles.label}>
+                    {speechModel === 'downloading'
+                      ? 'Downloading and verifying offline speech…'
+                      : 'Download offline speech'}
+                  </Text>
+                </Pressable>
+                {speechError !== '' && (
+                  <Text style={styles.description}>{speechError}</Text>
+                )}
+              </View>
+            )}
             <View style={styles.panel}>
               {!connected && (
                 <>
