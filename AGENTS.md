@@ -1,11 +1,11 @@
 # Agent instructions
 
-Don't introduce weirdly specific tools or logic for particular tools. If you think that's what you need to do, agree with me first
+Agree with the user before adding tools or logic specific to a particular app or tool.
 
 ## Offline speech
 
-The assistant transcribes offline with Parakeet TDT 0.6B v3 INT8 through sherpa-onnx 2.0.3. Gradle verifies the pinned sherpa-onnx runtime. The app downloads and verifies the pinned Parakeet archive during setup. Keep model files and runtime binaries out of git.
+Keep model files and runtime binaries out of Git. Gradle verifies the pinned sherpa-onnx runtime. Android Agent downloads and verifies the pinned Parakeet model during setup.
 
-To check decoding without a microphone, run `android/scripts/speech-samples.sh` (macOS, Samantha and Zosia voices), then `./gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=arm64-v8a` from `android/`. The smoke test checks that each sample produces text and logs timings and word error rate under `ParakeetSmoke`. The smoke test installs the model if it is missing, so its first run needs network access. Test inputs are 16 kHz mono 16-bit WAVs in `android/app/build/generated/speech-samples`, with optional matching `.txt` references.
+For a microphone-free smoke test, run `android/scripts/speech-samples.sh` on macOS, then run `./gradlew :app:connectedDebugAndroidTest -PreactNativeArchitectures=arm64-v8a` from `android/`. The test downloads the model if it is missing. It accepts 16 kHz mono 16-bit WAVs in `android/app/build/generated/speech-samples` with optional matching `.txt` references.
 
-The assistant logs timings and error codes under `AssistantSpeech`. Keep audio and transcripts out of app logs.
+Use `ParakeetSmoke` for timing and word error rate, and `AssistantSpeech` for app timings and error codes. Keep audio and transcripts out of logs.
