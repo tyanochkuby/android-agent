@@ -55,6 +55,7 @@ type StoredTurn = {
   status: string;
   detail: string | null;
   taskIds: string[];
+  owner?: string | null;
 };
 let turns: StoredTurn[];
 
@@ -105,21 +106,24 @@ beforeEach(() => {
       ),
     );
   jest.mocked(NativeTasks.readCheckpoint).mockResolvedValue(null);
-  jest.mocked(NativeTasks.startTurn).mockImplementation(async prompt => {
-    if (turns.some(turn => turn.status === 'RUNNING')) {
-      throw new Error('Finish the current prompt first.');
-    }
-    const id = String(turns.length + 1);
-    turns.push({
-      id,
-      prompt,
-      reply: null,
-      status: 'RUNNING',
-      detail: null,
-      taskIds: [],
+  jest
+    .mocked(NativeTasks.startTurn)
+    .mockImplementation(async (prompt, _attempt, owner) => {
+      if (turns.some(turn => turn.status === 'RUNNING')) {
+        throw new Error('Finish the current prompt first.');
+      }
+      const id = String(turns.length + 1);
+      turns.push({
+        id,
+        prompt,
+        owner,
+        reply: null,
+        status: 'RUNNING',
+        detail: null,
+        taskIds: [],
+      });
+      return id;
     });
-    return id;
-  });
   jest
     .mocked(NativeTasks.completeTurn)
     .mockImplementation(finish('COMPLETED', 'reply'));
@@ -478,6 +482,22 @@ describe('history without sharing', () => {
     respond.mockRejectedValueOnce(new Error('Network down.'));
     await ask('Hello');
     expect(JSON.parse(storedSettings!).session).toBeUndefined();
+    const companionModel = jest
+      .fn()
+      .mockResolvedValue('[{"tool":"finish","message":"Companion reply."}]');
+    const bridge = await connectCompanion(companionModel);
+    try {
+      await fireEvent.press(
+        screen.getByRole('checkbox', { name: 'Share earlier conversation' }),
+      );
+      await ask('Companion-only prompt');
+      companionModel.mockRejectedValueOnce(
+        new Error('Companion disconnected.'),
+      );
+      await ask('Disconnect');
+    } finally {
+      bridge.mockRestore();
+    }
     await fireEvent.press(
       screen.getByRole('button', { name: 'Continue with ChatGPT' }),
     );
@@ -572,9 +592,9 @@ test('a remounted screen shows the reply when an in-flight prompt settles', asyn
   const start = jest.mocked(NativeTasks.startTurn);
   const insert = start.getMockImplementation()!;
   start.mockImplementationOnce(
-    (prompt, attempt) =>
+    (prompt, attempt, owner) =>
       new Promise(resolve => {
-        commitPrompt = () => resolve(insert(prompt, attempt));
+        commitPrompt = () => resolve(insert(prompt, attempt, owner));
       }),
   );
   const mounted = await render(<App />);

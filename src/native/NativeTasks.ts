@@ -9,7 +9,11 @@ export interface Spec extends TurboModule {
   readCompletedTurns(after: string | null, limit: number): Promise<string>;
   readCheckpoint(): Promise<string | null>;
   saveCheckpoint(summary: string, covers: string): Promise<void>;
-  startTurn(prompt: string, attempt: string): Promise<string>;
+  startTurn(
+    prompt: string,
+    attempt: string,
+    owner: string | null,
+  ): Promise<string>;
   completeTurn(id: string, reply: string): Promise<void>;
   failTurn(id: string, detail: string): Promise<void>;
   waitForTask(id: string): Promise<string>;

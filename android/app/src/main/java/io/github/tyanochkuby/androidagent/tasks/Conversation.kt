@@ -22,6 +22,7 @@ data class Turn(
   val status: TurnStatus,
   val detail: String?,
   val taskIds: List<String>,
+  val owner: String? = null,
 )
 
 /** A model-written summary of every completed turn up to and including [covers]. */
@@ -34,6 +35,10 @@ internal fun createConversationSchema(db: SQLiteDatabase) {
     "CREATE TABLE IF NOT EXISTS turns (sequence INTEGER PRIMARY KEY, prompt TEXT NOT NULL, reply TEXT, " +
       "status TEXT NOT NULL, detail TEXT, legacy_sequence INTEGER UNIQUE)",
   )
+  val hasOwner = db.rawQuery("PRAGMA table_info(turns)", null).use { cursor ->
+    generateSequence { if (cursor.moveToNext()) cursor.getString(1) else null }.any { it == "owner" }
+  }
+  if (!hasOwner) db.execSQL("ALTER TABLE turns ADD COLUMN owner TEXT")
   db.execSQL("CREATE TABLE IF NOT EXISTS turn_tasks (turn INTEGER NOT NULL, task TEXT NOT NULL, PRIMARY KEY (turn, task))")
   db.execSQL("CREATE TABLE IF NOT EXISTS turn_starts (attempt TEXT PRIMARY KEY, turn INTEGER NOT NULL)")
   db.execSQL("CREATE TABLE IF NOT EXISTS checkpoints (sequence INTEGER PRIMARY KEY, summary TEXT NOT NULL, covers INTEGER NOT NULL)")
@@ -64,7 +69,7 @@ internal fun linkTaskToTurn(db: SQLiteDatabase, turn: String, task: String) {
  * tasks submitted while it ran.
  */
 internal class Conversation(private val database: SQLiteOpenHelper) {
-  suspend fun start(prompt: String, attempt: String): String = write { db ->
+  suspend fun start(prompt: String, attempt: String, owner: String?): String = write { db ->
     require(prompt.isNotBlank() && prompt.length <= MAX_TEXT) { "Invalid prompt." }
     val interrupted = ContentValues().apply { put("status", TurnStatus.INTERRUPTED.name) }
     db.update(
@@ -75,6 +80,7 @@ internal class Conversation(private val database: SQLiteOpenHelper) {
     check(DatabaseUtils.queryNumEntries(db, "turns", "status = 'RUNNING'") == 0L) { "Finish the current prompt first." }
     val values = ContentValues().apply {
       put("prompt", prompt)
+      put("owner", owner)
       put("status", TurnStatus.RUNNING.name)
     }
     val id = db.insertOrThrow("turns", null, values)
@@ -106,7 +112,7 @@ internal class Conversation(private val database: SQLiteOpenHelper) {
     }
     val older = if (before == null) "" else "WHERE sequence < ? "
     val turns = db.rawQuery(
-      "SELECT sequence, prompt, reply, status, detail FROM turns ${older}ORDER BY sequence DESC LIMIT ?",
+      "SELECT sequence, prompt, reply, status, detail, owner FROM turns ${older}ORDER BY sequence DESC LIMIT ?",
       listOfNotNull(before, limit.toString()).toTypedArray(),
     ).use { cursor ->
       buildList {
@@ -114,7 +120,7 @@ internal class Conversation(private val database: SQLiteOpenHelper) {
           add(
             Turn(
               cursor.getString(0), cursor.getString(1), cursor.getString(2),
-              TurnStatus.valueOf(cursor.getString(3)), cursor.getString(4), emptyList(),
+              TurnStatus.valueOf(cursor.getString(3)), cursor.getString(4), emptyList(), cursor.getString(5),
             ),
           )
         }

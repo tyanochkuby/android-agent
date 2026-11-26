@@ -170,16 +170,21 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
   /** Runs `call` with a fresh access token, refreshing once more if ChatGPT rejects it. */
   private suspend fun <T> authorized(call: suspend (Account, String) -> T): T {
     var (account, session) = fresh(null)
-    if (SHARING_SCOPE !in session.scopes) throw ChatGPTException("plan_usage_declined", "Allow ChatGPT plan usage when you sign in.")
+    suspend fun dispatch(account: Account, session: Session): T {
+      if (SHARING_SCOPE !in session.scopes) {
+        throw ChatGPTException("plan_usage_declined", "Allow ChatGPT plan usage when you sign in.")
+      }
+      return call(account, session.accessToken)
+    }
     return try {
-      call(account, session.accessToken)
+      dispatch(account, session)
     } catch (_: Unauthorized) {
       fresh(session.accessToken).let { (latest, refreshed) ->
         account = latest
         session = refreshed
       }
       try {
-        call(account, session.accessToken)
+        dispatch(account, session)
       } catch (_: Unauthorized) {
         throw ChatGPTException("unauthorized", "ChatGPT did not accept this sign-in. Sign in with ChatGPT again.")
       }

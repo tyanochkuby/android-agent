@@ -96,7 +96,7 @@ export async function ask(
   let config = await settings.read();
   if (unsaved) await save(unsaved.id, unsaved.outcome);
   const owner = config.session && historyOwner(config.session);
-  if (owner && config.scope?.owner !== owner) {
+  if (owner && !config.session?.chatgpt && config.scope?.owner !== owner) {
     config = {
       ...config,
       scope: { owner, since: await conversation.latestId() },
@@ -107,7 +107,7 @@ export async function ask(
   const attempt = (startAttempt ??= `${Date.now()}-${Math.random()
     .toString(36)
     .slice(2)}`);
-  const id = await conversation.start(message, attempt);
+  const id = await conversation.start(message, attempt, owner ?? null);
   startAttempt = null;
   unsaved = null;
   changed();
@@ -115,7 +115,7 @@ export async function ask(
   let outcome: Outcome;
   try {
     const { session, shareHistory, scope } = config;
-    if (!session || !scope) {
+    if (!session || !owner) {
       throw new Error('Sign in with ChatGPT in Android Agent.');
     }
     const budget = contextBudget(session.contextWindow);
@@ -128,7 +128,11 @@ export async function ask(
         shareScreen,
         shareHistory
           ? await conversation.context(model, budget)
-          : await conversation.since(scope.since, budget),
+          : await conversation.since(
+              session.chatgpt ? null : scope?.since ?? null,
+              budget,
+              owner,
+            ),
         budget,
       ),
     };

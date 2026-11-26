@@ -87,9 +87,9 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     null
   }
 
-  override fun startTurn(prompt: String, attempt: String, promise: Promise) = respond(promise) {
+  override fun startTurn(prompt: String, attempt: String, owner: String?, promise: Promise) = respond(promise) {
     recoverConversation()
-    conversation.start(prompt, attempt)
+    conversation.start(prompt, attempt, owner)
   }
 
   override fun completeTurn(id: String, reply: String, promise: Promise) = respond(promise) {

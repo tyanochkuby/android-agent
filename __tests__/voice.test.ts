@@ -56,6 +56,7 @@ test('runs the transcript as a saved turn and returns the reply', async () => {
   expect(NativeTasks.startTurn).toHaveBeenCalledWith(
     'What is the weather?',
     expect.any(String),
+    expect.stringMatching(/^companion:/),
   );
   expect(NativeTasks.completeTurn).toHaveBeenCalledWith(
     String(turn),
