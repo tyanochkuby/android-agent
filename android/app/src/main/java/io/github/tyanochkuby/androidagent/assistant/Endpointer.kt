@@ -18,12 +18,22 @@ class Endpointer(
     private set
 
   private var frames = 0
+  private var initialLevel = 0f
+  private var checkingInitialSpeech = true
   private var voicedRun = 0
   private var floor = Float.MAX_VALUE
   private val speaking get() = lastVoicedFrame >= 0
 
   fun accept(rms: Float): Endpoint? {
     val frame = frames++
+    if (frame == 0) initialLevel = rms
+    if (checkingInitialSpeech && (speaking || rms < initialLevel / SPEECH_OVER_FLOOR)) {
+      checkingInitialSpeech = false
+      // A sustained opening burst can only be distinguished from steady noise once it gets quieter.
+      if (!speaking && frame >= START_FRAMES && initialLevel > MIN_SPEECH_RMS * SPEECH_OVER_FLOOR) {
+        lastVoicedFrame = frame - 1
+      }
+    }
     floor = min(rms, if (floor == Float.MAX_VALUE) rms else floor * FLOOR_RISE)
     voicedRun = if (rms > max(floor * SPEECH_OVER_FLOOR, MIN_SPEECH_RMS)) voicedRun + 1 else 0
     if (voicedRun >= START_FRAMES || speaking && voicedRun > 0) lastVoicedFrame = frame

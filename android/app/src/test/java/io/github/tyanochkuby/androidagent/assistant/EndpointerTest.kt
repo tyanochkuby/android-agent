@@ -27,6 +27,15 @@ class EndpointerTest {
   }
 
   @Test
+  fun `speech in the first frame is retained when the room gets quiet`() {
+    val endpointer = Endpointer()
+    val (endpoint, frame) = endpointer.run(frames(300, speech) + frames(180, speech / 2) + generateSequence { quiet })
+    assertEquals(Endpoint.SPEECH_ENDED, endpoint)
+    assertEquals(23, endpointer.lastVoicedFrame)
+    assertEquals(23 + 35, frame)
+  }
+
+  @Test
   fun `short pauses inside speech do not end the utterance`() {
     val endpointer = Endpointer()
     val utterance = frames(500, speech) + frames(400, quiet) + frames(500, speech)

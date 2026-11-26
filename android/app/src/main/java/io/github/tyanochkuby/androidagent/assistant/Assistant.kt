@@ -188,7 +188,10 @@ class AssistantService : VoiceInteractionService() {
           if (recorded == 0) main.post { onReady(now) }
           val endpoint = endpointer.accept(Endpointer.rms(audio, recorded, recorded + read))
           recorded += read
-          if (endpointer.lastVoicedFrame == frame++) lastVoicedAt = now
+          if (endpointer.lastVoicedFrame >= 0) {
+            lastVoicedAt = now - (frame - endpointer.lastVoicedFrame) * Endpointer.FRAME_MS
+          }
+          frame++
           if (endpoint == null) continue
           val speech = audio.copyOf(minOf(recorded, (endpointer.lastVoicedFrame + 1) * FRAME_SAMPLES + TRAILING_SAMPLES))
           main.post { onEndpoint(endpoint, speech, lastVoicedAt, now) }
