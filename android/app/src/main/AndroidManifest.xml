@@ -2,6 +2,7 @@
 
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <queries>
       <package android:name="com.google.android.calculator" />
@@ -44,6 +45,12 @@
         android:name=".assistant.AssistantSessionService"
         android:exported="true"
         android:permission="android.permission.BIND_VOICE_INTERACTION" />
+      <activity
+        android:name=".assistant.MicrophonePermissionActivity"
+        android:excludeFromRecents="true"
+        android:exported="false"
+        android:taskAffinity=""
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
       <service
         android:name=".assistant.AssistantRecognizer"
         android:exported="false" />
