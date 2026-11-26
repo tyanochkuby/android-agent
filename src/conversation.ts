@@ -42,6 +42,19 @@ export const conversation = {
       }),
     );
   },
+  // ID of the newest saved turn, or null for an empty journal.
+  async latestId() {
+    const [latest] = await readTurns(1);
+    return latest?.id ?? null;
+  },
+  // Returns model input from the newest completed turns after `since` that fit the history
+  // budget, without the checkpoint, which may cover earlier turns.
+  async since(since: string | null, budget: ContextBudget) {
+    return prefix(
+      null,
+      await newest(null, budget.historyTokens, budget, since),
+    );
+  },
   // Saves the prompt as a running turn and returns its ID.
   start: (prompt: string, attempt: string) =>
     NativeTasks.startTurn(prompt, attempt),
@@ -134,18 +147,20 @@ async function uncovered(
   }
 }
 
-// Reads the newest completed turns after the checkpoint that fit in `limit` tokens, oldest first.
+// Reads the newest completed turns after `after` that fit in `limit` tokens with the checkpoint,
+// oldest first.
 async function newest(
   checkpoint: Checkpoint | null,
   limit: number,
   budget: ContextBudget,
+  after = checkpoint?.covers ?? null,
 ) {
   const turns: Completed[] = [];
   let before: string | null = null;
   for (;;) {
     const page = await readTurns(20, before);
     for (const turn of page) {
-      if (checkpoint && BigInt(turn.id) <= BigInt(checkpoint.covers)) {
+      if (after !== null && BigInt(turn.id) <= BigInt(after)) {
         return turns;
       }
       if (turn.status !== 'COMPLETED') continue;

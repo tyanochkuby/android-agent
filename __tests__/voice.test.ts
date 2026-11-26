@@ -6,6 +6,7 @@ import { voiceTurn } from '../src/voice';
 jest.mock('../src/native/NativeTasks', () => ({
   __esModule: true,
   default: {
+    readConversation: jest.fn(async () => '[]'),
     readCompletedTurns: jest.fn(async () => '[]'),
     readCheckpoint: jest.fn(async () => null),
     startTurn: jest.fn(),
@@ -14,6 +15,12 @@ jest.mock('../src/native/NativeTasks', () => ({
     readSettings: jest.fn(),
     saveSettings: jest.fn(),
     finishVoiceTurn: jest.fn(),
+    chatgptStatus: jest.fn(async () => null),
+    chatgptSignIn: jest.fn(),
+    chatgptCancelSignIn: jest.fn(),
+    chatgptConnect: jest.fn(),
+    chatgptSignOut: jest.fn(),
+    chatgptRespond: jest.fn(),
     submit: jest.fn(),
   },
 }));
@@ -91,12 +98,42 @@ test('records a failed turn while signed out', async () => {
   expect(model).not.toHaveBeenCalled();
   expect(NativeTasks.failTurn).toHaveBeenCalledWith(
     String(turn),
-    'Connect the companion in Android Agent.',
+    'Sign in with ChatGPT in Android Agent.',
   );
   expect(NativeTasks.finishVoiceTurn).toHaveBeenCalledWith(
     'voice-3',
-    'Connect the companion in Android Agent.',
+    'Sign in with ChatGPT in Android Agent.',
     true,
+  );
+});
+
+test('answers on the ChatGPT account signed in on the phone', async () => {
+  jest.mocked(NativeTasks.readSettings).mockResolvedValue(
+    JSON.stringify({
+      pairingCode: '',
+      session: { id: 'user-1', contextWindow: null, chatgpt: true },
+      shareHistory: false,
+    }),
+  );
+  jest.mocked(NativeTasks.chatgptRespond).mockResolvedValue(
+    JSON.stringify({
+      text: '[{"tool":"finish","message":"Hi there."}]',
+      inputTokens: null,
+    }),
+  );
+
+  await voiceTurn({ id: 'voice-6', transcript: 'Hello' });
+
+  expect(model).not.toHaveBeenCalled();
+  expect(NativeTasks.chatgptRespond).toHaveBeenCalledWith(
+    'user-1',
+    expect.any(String),
+    expect.stringContaining('"content":"Hello"'),
+  );
+  expect(NativeTasks.finishVoiceTurn).toHaveBeenCalledWith(
+    'voice-6',
+    'Hi there.',
+    false,
   );
 });
 

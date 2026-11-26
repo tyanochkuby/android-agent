@@ -40,7 +40,8 @@ export async function voiceTurn({
       failed = 'failure' in outcome;
       text = 'reply' in outcome ? outcome.reply : outcome.failure;
     } else {
-      text = 'Android Agent is finishing another prompt. Try again when it is done.';
+      text =
+        'Android Agent is finishing another prompt. Try again when it is done.';
     }
   } catch (error) {
     text =
