@@ -101,6 +101,7 @@ class AssistantService : VoiceInteractionService() {
     private val screenOff = object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) = finish(null)
     }
+    private val captureStart = Any()
     @Volatile private var cancelled = false
     @Volatile private var silenced = false
     private var readyAt: Long? = null
@@ -108,10 +109,18 @@ class AssistantService : VoiceInteractionService() {
     init {
       registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
       transcriber.prepare()
+      dot.viewTreeObserver.registerFrameCommitCallback {
+        if (listening === this) startCapture()
+      }
+    }
+
+    private fun startCapture() {
       micBusy = true
       thread(name = "AssistantMic") {
         try {
           if (!cancelled) record()
+        } catch (_: SecurityException) {
+          fail(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
         } catch (_: IllegalStateException) {
           fail(SpeechRecognizer.ERROR_AUDIO)
         } finally {
@@ -120,9 +129,9 @@ class AssistantService : VoiceInteractionService() {
       }
     }
 
-    /** Stops recording or decoding. The mic thread releases the AudioRecord within one frame. */
+    /** Cancels pending capture and discards any late result. */
     fun release() {
-      cancelled = true
+      synchronized(captureStart) { cancelled = true }
       unregisterReceiver(screenOff)
     }
 
@@ -143,7 +152,10 @@ class AssistantService : VoiceInteractionService() {
             }
           })
         }
-        record.startRecording()
+        synchronized(captureStart) {
+          if (cancelled) return
+          record.startRecording()
+        }
         if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) return fail(SpeechRecognizer.ERROR_AUDIO)
 
         val audio = FloatArray(MAX_SAMPLES)
@@ -252,7 +264,7 @@ class AssistantService : VoiceInteractionService() {
     val margin = (16 * resources.displayMetrics.density).roundToInt()
     val layout = LayoutParams(
       width, height, LayoutParams.TYPE_APPLICATION_OVERLAY,
-      LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_NOT_TOUCH_MODAL,
+      LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_NOT_TOUCH_MODAL or LayoutParams.FLAG_HARDWARE_ACCELERATED,
       PixelFormat.TRANSLUCENT,
     ).apply {
       gravity = Gravity.BOTTOM or Gravity.RIGHT
