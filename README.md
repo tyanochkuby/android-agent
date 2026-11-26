@@ -1,6 +1,6 @@
 # Android Agent
 
-Android Agent is an Android-first assistant project. The demo includes two local tasks and a debug-only prompt runner. **Start timer** sends a timer request to Clock. **Find and open Google Maps** looks up an installed app and uses the typed search result to open it. Both show their saved step status when you return to Android Agent. Neither needs an account or model provider.
+Android Agent is an Android-first assistant project. The app is a chat with an agent that runs Android tools on the phone and uses a ChatGPT plan through a companion on your computer. On API 36 it can also be the default digital assistant and answer spoken prompts over other apps.
 
 See [the architecture and Android constraints](docs/architecture.md) for the Kotlin executor contract, recovery behavior, and app verification.
 
@@ -53,7 +53,7 @@ adb reverse tcp:8765 tcp:8765
 
 Add `--sign-in` after the DevKit path to open the ChatGPT sign-in page at startup if there is no saved session with plan usage enabled.
 
-1. In **Ask Android Agent**, enter the pairing code the companion printed and tap **Check connection**. If sign-in is needed, tap **Sign in with ChatGPT**, approve plan usage in the browser, then check the connection again. After a companion restart on macOS, enter the new pairing code and check the connection to use the saved session.
+1. In Android Agent, enter the pairing code the companion printed and tap **Check connection**. If sign-in is needed, tap **Sign in with ChatGPT**, approve plan usage in the browser, then check the connection again. After a companion restart on macOS, enter the new pairing code and check the connection to use the saved session.
 2. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
 3. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
 
@@ -70,14 +70,21 @@ npm test -- --runInBand
 (cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug)
 ```
 
+To build a debug APK that runs without Metro, add `-PbundleJs`. It is signed with the local debug key.
+
+```sh
+(cd android && ./gradlew :app:assembleDebug -PbundleJs -PreactNativeArchitectures=arm64-v8a)
+```
+
 ## Device smoke test
 
-Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps installed. An API 36 Google APIs emulator with those apps can exercise the same flow.
+Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps installed and the companion connected. An API 36 Google APIs emulator with those apps can exercise the same flow.
 
-1. Pick **1 min** and tap **Start timer**. Open Clock to confirm the countdown and dismiss the test timer. In Android Agent, the saved step reads `issued`. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
-2. Tap **Accessibility settings**, enable **Android Agent window verification**, and return to Android Agent. Android may require allowing restricted settings for the sideloaded app before it can enable the service.
-3. Tap **Find and open Google Maps**. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The search should list Google Maps and the open step should report **Google Maps window verified**. With the service disabled, the open step should report `issued`.
+1. Send `Set a timer for 1 minute`. Open Clock to confirm the countdown and dismiss the test timer. In Android Agent, the saved step reads `issued`. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
+2. Tap the Accessibility settings note under the composer, enable **Android Agent window verification**, and return to Android Agent. Android may require allowing restricted settings for the sideloaded app before it can enable the service.
+3. Tick the screen-sharing box and send `Open Google Maps`. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The open step should report **Google Maps window verified**.
 4. Force-stop and reopen Android Agent. The latest task should still be visible. A recorded `issued` or verified action should retain that status without another launch.
+5. Choose Android Agent as the default digital assistant, open another app and invoke the assistant. Ask a short question. The blue working dot should turn into a reply card without bringing Android Agent forward, and the turn should appear in Android Agent's history.
 
 ## Android integration tests
 

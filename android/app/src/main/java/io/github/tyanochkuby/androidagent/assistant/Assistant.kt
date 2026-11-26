@@ -3,6 +3,10 @@ package io.github.tyanochkuby.androidagent.assistant
 import android.Manifest
 import android.app.Activity
 import android.app.KeyguardManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -38,11 +42,16 @@ import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
 import android.widget.TextView
+import androidx.annotation.RequiresApi
 import io.github.tyanochkuby.androidagent.R
 import kotlin.concurrent.thread
 import kotlin.math.roundToInt
 
-/** Makes Android Agent eligible for the default digital assistant role and owns the listening dot across session hides. */
+/**
+ * Makes Android Agent eligible for the default digital assistant role and owns the listening dot across session hides.
+ * Enabled only from API 36 through `assistant_prototype_enabled`.
+ */
+@RequiresApi(36)
 class AssistantService : VoiceInteractionService() {
   private var overlay: View? = null
   private var micBusy = false
@@ -235,7 +244,8 @@ class AssistantService : VoiceInteractionService() {
       Log.i(TAG, "result endpoint=$endpoint $timing")
       if (transcript == null) return fail(SpeechRecognizer.ERROR_CLIENT)
       if (transcript.isBlank()) return finish(null)
-      finish(getString(R.string.assistant_transcript, transcript, timing.summary))
+      finish(null)
+      startTurn(transcript)
     }
 
     /** Callable from any thread. */
@@ -248,7 +258,46 @@ class AssistantService : VoiceInteractionService() {
     }
   }
 
-  /** Tapping the dot cancels listening. */
+  /**
+   * Runs the transcript as one background agent turn while a working dot shows. A reply that arrives while that dot is
+   * still on screen is quick and replaces it with a card. Once the dot is gone, because the user tapped it or invoked
+   * the assistant again, the turn is long-running and its result posts a notification. Logs carry only duration and status.
+   */
+  private fun startTurn(transcript: String) {
+    val startedAt = SystemClock.elapsedRealtime()
+    val working = showDot(WORKING)
+    VoiceTurns.start(this, transcript) { text, failed ->
+      val quick = working != null && active === this && overlay === working
+      Log.i(TAG, "turn ms=${SystemClock.elapsedRealtime() - startedAt} failed=$failed quick=$quick")
+      if (quick) {
+        removeOverlay()
+        showCard(text)
+      } else {
+        notifyResult(text, failed)
+      }
+    }
+  }
+
+  private fun notifyResult(text: String, failed: Boolean) {
+    val notifications = getSystemService(NotificationManager::class.java)
+    notifications.createNotificationChannel(
+      NotificationChannel(RESULTS, getString(R.string.voice_results), NotificationManager.IMPORTANCE_DEFAULT),
+    )
+    val open = PendingIntent.getActivity(
+      this, 0, packageManager.getLaunchIntentForPackage(packageName), PendingIntent.FLAG_IMMUTABLE,
+    )
+    val notification = Notification.Builder(this, RESULTS)
+      .setSmallIcon(android.R.drawable.sym_action_chat)
+      .setContentTitle(getString(if (failed) R.string.voice_failed else R.string.voice_replied))
+      .setContentText(text)
+      .setStyle(Notification.BigTextStyle().bigText(text))
+      .setContentIntent(open)
+      .setAutoCancel(true)
+      .build()
+    notifications.notify(nextNotification++, notification)
+  }
+
+  /** Tapping the dot cancels listening, or hands a running turn's result to a notification. */
   private fun showDot(color: Int): View? {
     val size = (24 * resources.displayMetrics.density).roundToInt()
     val dot = View(this).apply {
@@ -262,7 +311,7 @@ class AssistantService : VoiceInteractionService() {
     return addOverlay(dot, size, size)
   }
 
-  /** Keeps the final transcript and timings on screen for manual comparison until tapped. */
+  /** Keeps a reply or an error on screen until tapped. */
   private fun showCard(text: String) {
     val density = resources.displayMetrics.density
     val padding = (12 * density).roundToInt()
@@ -351,6 +400,9 @@ class AssistantService : VoiceInteractionService() {
   companion object {
     private const val TAG = "AssistantSpeech"
     private val LISTENING = Color.rgb(0x8A, 0xE2, 0x34)
+    private val WORKING = Color.rgb(0x5B, 0x8D, 0xEF)
+    private const val RESULTS = "voice-results"
+    private var nextNotification = 1
     private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
     private const val ENCODING = AudioFormat.ENCODING_PCM_FLOAT
     private const val FRAME_SAMPLES = Transcriber.SAMPLE_RATE * Endpointer.FRAME_MS / 1000
@@ -371,10 +423,7 @@ private data class Timing(
   val endpointWait: Long,
   val decode: Long,
   val audio: Long,
-) {
-  val summary get() =
-    "${if (cold) "cold" else "warm"} · ready $invocationToReady ms · final $speechEndToFinal ms (endpoint $endpointWait + processing $decode) · audio $audio ms"
-}
+)
 
 /** Android requires a recognizer before granting the assistant role. It declines every request until speech is designed. */
 class AssistantRecognizer : RecognitionService() {
@@ -384,6 +433,7 @@ class AssistantRecognizer : RecognitionService() {
 }
 
 /** Android binds this whenever the user invokes the assistant. */
+@RequiresApi(36)
 class AssistantSessionService : VoiceInteractionSessionService() {
   override fun onNewSession(args: Bundle?) = object : VoiceInteractionSession(this) {
     override fun onCreate() {

@@ -41,6 +41,20 @@ Idle compaction runs the same summary request in the background, so the next pro
 
 The executor lives in the Android application scope and can record results after the React Native Activity pauses. A foreground handoff, lock, or loss of window focus in the confirmed Activity requires an explicit **Continue task** before another UI action can run. The first slice never injects gestures into the target app. It records the app-window observation during the handoff when available. The user can keep using their phone while read-only calls finish.
 
+## Voice turns
+
+On API 36, Android Agent can be the default digital assistant. `AssistantService` records one utterance, transcribes it offline and hands the final transcript to `VoiceTurns`, which starts the `VoiceTurn` headless task in the shared React Native runtime. A cold runtime starts without an Activity, so Android Agent never comes to the foreground. `src/voice.ts` runs the transcript through `ask` in `src/prompts.ts`, the same path as typed prompts, so it saves a `RUNNING` turn first, uses the saved companion connection and history consent, and records the reply or failure in the same journal.
+
+Typed and voice prompts share one runtime-wide lock. A voice turn that arrives while another prompt is running is not queued: the overlay reports that Android Agent is busy and no turn is saved. The native journal refuses a second running turn as a second guard. Without a saved connection the turn is saved as `FAILED` with "Connect the companion in Android Agent." Any failure clears the saved connection and its history consent, as it does for typed prompts.
+
+The companion pairing code, the current connection and the history consent live in app-private `SharedPreferences` so a headless runtime can read them. Backups are disabled.
+
+Voice turns are text-only. The agent sees its usual tools, but every Android action, including screen sharing, fails with an error telling the user to open Android Agent. The native guards that require a resumed Activity and per-prompt screen consent are unchanged.
+
+Pending voice turns are held only in memory. If the process dies, the next runtime marks the turn `INTERRUPTED` and nothing replays. The headless task ignores a repeated delivery of the same turn ID.
+
+While a turn runs, a blue working dot replaces the listening dot. A reply that arrives while that dot is still on screen counts as quick and replaces it with a card that stays until tapped. If the user taps the dot away or invokes the assistant again, the turn counts as long-running and its reply or failure posts a notification instead. This boundary uses no fixed threshold. Each turn logs its duration, whether it failed and whether it was quick under `AssistantSpeech`, never the transcript or reply, so a time threshold can be chosen from measurements later.
+
 ## Permissions and workflows
 
 The current allow-all mode covers the typed timer and supported app operations. Debug builds include an opt-in Accessibility service for foreground app evidence. It reads the active window's package and persists only the supported target, whether it matched, and when. Search queries and timer durations are local task inputs. Richer observations would need explicit consent for the task before collection or transmission. This slice sends no observation data to a model provider.

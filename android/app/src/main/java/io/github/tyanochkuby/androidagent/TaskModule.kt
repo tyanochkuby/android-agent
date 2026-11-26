@@ -1,11 +1,13 @@
 package io.github.tyanochkuby.androidagent
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import io.github.tyanochkuby.androidagent.assistant.VoiceTurns
 import io.github.tyanochkuby.androidagent.tasks.Phase
 import io.github.tyanochkuby.androidagent.tasks.UiSession
 import io.github.tyanochkuby.androidagent.tasks.WindowObserver
@@ -95,6 +97,23 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   override fun failTurn(id: String, detail: String, promise: Promise) = respond(promise) {
     recoverConversation()
     conversation.fail(id, detail)
+    null
+  }
+
+  // Companion settings stay on the device so a voice turn can run while Android Agent is closed.
+  private val preferences = context.getSharedPreferences(SETTINGS, Context.MODE_PRIVATE)
+
+  override fun readSettings(promise: Promise) = respond(promise) {
+    preferences.getString(SETTINGS, null)
+  }
+
+  override fun saveSettings(settings: String, promise: Promise) = respond(promise) {
+    check(preferences.edit().putString(SETTINGS, settings).commit()) { "Could not save the settings." }
+    null
+  }
+
+  override fun finishVoiceTurn(id: String, text: String, failed: Boolean, promise: Promise) = respond(promise) {
+    VoiceTurns.finish(id, text, failed)
     null
   }
 
@@ -199,6 +218,7 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
 
   companion object {
     private val PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
+    private const val SETTINGS = "settings"
     const val NAME = "NativeTasks"
   }
 }

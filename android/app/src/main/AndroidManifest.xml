@@ -1,8 +1,10 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
       <package android:name="com.google.android.calculator" />
@@ -31,6 +33,7 @@
       </activity>
       <service
         android:name=".assistant.AssistantService"
+        tools:targetApi="36"
         android:enabled="@bool/assistant_prototype_enabled"
         android:exported="true"
         android:permission="android.permission.BIND_VOICE_INTERACTION">
@@ -43,6 +46,7 @@
       </service>
       <service
         android:name=".assistant.AssistantSessionService"
+        tools:targetApi="36"
         android:exported="true"
         android:permission="android.permission.BIND_VOICE_INTERACTION" />
       <activity

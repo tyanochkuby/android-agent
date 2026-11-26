@@ -5,6 +5,8 @@ apply plugin: "com.facebook.react"
 
 react {
     autolinkLibrariesWithApp()
+    // -PbundleJs packages the JS bundle into debug builds so they run without Metro.
+    debuggableVariants = project.hasProperty("bundleJs") ? [] : ["debug"]
 }
 
 def modelName = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"

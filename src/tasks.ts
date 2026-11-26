@@ -71,16 +71,3 @@ export const tasks = {
   },
   openAccessibilitySettings: () => NativeTasks.openAccessibilitySettings(),
 };
-
-export function mapsSteps(): TaskRequest['steps'] {
-  return [
-    { id: 'find', action: { type: 'apps.search', query: appLabels.MAPS } },
-    {
-      id: 'open',
-      action: {
-        type: 'apps.open',
-        target: { type: 'fromSearch', stepId: 'find' },
-      },
-    },
-  ];
-}

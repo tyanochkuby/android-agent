@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">Android Agent</string>
     <string name="dismiss_assistant_dot">Stop listening</string>
-    <string name="assistant_transcript">%1$s\n\n%2$s</string>
+    <string name="voice_results">Voice replies</string>
+    <string name="voice_replied">Android Agent replied</string>
+    <string name="voice_failed">Android Agent could not answer</string>
     <string name="assistant_recognizer_error">Speech recognition failed (error %1$d).</string>
 </resources>
