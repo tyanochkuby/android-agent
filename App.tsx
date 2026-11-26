@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AppState,
+  KeyboardAvoidingView,
   Pressable,
   ScrollView,
   StatusBar,
@@ -10,47 +11,37 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { appLabels, mapsSteps, tasks } from './src/tasks';
-import type { Task, TaskRequest } from './src/tasks';
-import { contextBudget, fallbackContextTokens, runAgent } from './src/agent';
-import type { ContextBudget } from './src/agent';
+import { appLabels, tasks } from './src/tasks';
+import type { Task } from './src/tasks';
+import { contextBudget, fallbackContextTokens } from './src/agent';
 import { agentTools } from './src/agentTools';
 import { companion } from './src/companion';
 import { conversation } from './src/conversation';
 import type { Outcome, Turn } from './src/conversation';
-import { idleCompactor } from './src/idleCompaction';
+import { ask, compactor, exclusive, prompts } from './src/prompts';
+import { emptySettings, settings } from './src/settings';
+import type { Settings } from './src/settings';
 
-const durations = [1, 5, 10] as const;
-type Duration = (typeof durations)[number];
 const historyPage = 20;
 
-// Keep in-flight work and pending writes across component remounts in the same runtime.
-let submission: Promise<string | undefined> | null = null;
-const promptSavedListeners = new Set<() => void>();
-let startAttempt: string | null = null;
-let unsaved: { id: string; outcome: Outcome } | null = null;
-const compactor = idleCompactor();
-
 export default function App() {
-  const [minutes, setMinutes] = useState<Duration>(10);
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(prompts.busy);
   const [status, setStatus] = useState('');
-  const [pairingCode, setPairingCode] = useState('');
-  // The companion session and a token budget for the model it selected.
-  const [session, setSession] = useState<{
-    id: string;
-    budget: ContextBudget;
-  }>();
+  const [config, setConfig] = useState<Settings>(emptySettings);
+  const { pairingCode, session, shareHistory } = config;
   const connected = session !== undefined;
-  const [shareHistory, setShareHistory] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [shareScreen, setShareScreen] = useState(false);
   const [answer, setAnswer] = useState('');
   const [history, setHistory] = useState<Turn[]>([]);
-  const [earlier, setEarlier] = useState(false);
+  const [olderPage, setOlderPage] = useState<boolean | null>(null);
+  const earlier = olderPage ?? history.length >= historyPage;
   const revision = useRef(0);
+  const historyRead = useRef(0);
+  const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const lastScrolledTurn = useRef<string | undefined>(undefined);
   const states = Object.values(task?.states ?? {});
   const running = states.some(
     ({ phase }) => phase === 'QUEUED' || phase === 'RUNNING',
@@ -75,10 +66,13 @@ export default function App() {
     );
   }
 
+  // Reads the newest page, or the page before `before`, and merges it with loaded turns.
   async function loadHistory(before: string | null = null) {
+    const read = before === null ? ++historyRead.current : historyRead.current;
     const page = await conversation.read(historyPage, before);
-    if (before !== null || page.length === historyPage) {
-      setEarlier(page.length === historyPage);
+    if (before === null && read !== historyRead.current) return;
+    if (before !== null) {
+      setOlderPage(page.length === historyPage);
     }
     setHistory(current => {
       if (before !== null) {
@@ -97,49 +91,32 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    let historyRead = 0;
-    const pendingSubmission = submission;
-    async function refreshHistory() {
-      if (!__DEV__) return;
-      const read = ++historyRead;
-      try {
-        const page = await conversation.read(historyPage);
-        if (active && read === historyRead) {
-          setHistory(page);
-          setEarlier(page.length === historyPage);
-        }
-      } catch {
-        if (active && read === historyRead)
-          setAnswer('Could not load the conversation.');
-      }
-    }
-
-    if (pendingSubmission) {
-      setPending(true);
-      promptSavedListeners.add(refreshHistory);
-    }
-    (async () => {
-      await refreshHistory();
-      if (active && !pendingSubmission && unsaved)
-        setAnswer(unsavedText(unsaved.outcome));
-      if (pendingSubmission) {
-        const failure = await pendingSubmission;
-        if (!active) return;
-        const [snapshot] = await Promise.all([
-          tasks.read().catch(() => undefined),
-          refreshHistory(),
-        ]);
-        if (active) {
-          if (snapshot !== undefined) updateTask(snapshot);
-          if (failure !== undefined) setStatus(failure);
-          if (unsaved) setAnswer(unsavedText(unsaved.outcome));
-          setPending(false);
-        }
-      }
-    })();
+    const unsubscribeSettings = settings.subscribe(setConfig);
+    settings
+      .read()
+      .then(saved => active && setConfig(saved))
+      .catch(() => {});
+    loadHistory().catch(
+      () => active && setAnswer('Could not load the conversation.'),
+    );
+    if (!prompts.busy && prompts.unsaved)
+      setAnswer(unsavedText(prompts.unsaved.outcome));
+    // Typed and voice prompts share one runtime, so either can finish while this screen is open.
+    const unsubscribe = prompts.subscribe(() => {
+      if (!active) return;
+      setPending(prompts.busy);
+      loadHistory().catch(() => {});
+      if (prompts.busy) return;
+      tasks
+        .read()
+        .then(snapshot => active && updateTask(snapshot))
+        .catch(() => {});
+      if (prompts.unsaved) setAnswer(unsavedText(prompts.unsaved.outcome));
+    });
     return () => {
       active = false;
-      promptSavedListeners.delete(refreshHistory);
+      unsubscribe();
+      unsubscribeSettings();
     };
   }, []);
 
@@ -155,7 +132,7 @@ export default function App() {
       const version = revision.current;
       try {
         const snapshot = await tasks.read();
-        if (active && submission === null && revision.current === version) {
+        if (active && !prompts.busy && revision.current === version) {
           updateTask(snapshot);
         }
       } catch (error) {
@@ -188,14 +165,16 @@ export default function App() {
 
   // While connected, sharing history, idle and in the foreground, compaction may run on the
   // companion's open model connection. Any change here or a new submission stops it.
+  const sessionId = session?.id;
+  const contextWindow = session?.contextWindow ?? null;
   useEffect(() => {
-    if (!session || !shareHistory || pending) return;
-    const { id, budget } = session;
+    if (!sessionId || !shareHistory || pending) return;
+    const budget = contextBudget(contextWindow);
     const code = pairingCode.trim();
     const compactWhenIdle = () =>
       compactor.start(signal =>
         conversation.compactIdle(
-          companion(code, id).liveModel(signal),
+          companion(code, sessionId).liveModel(signal),
           budget,
           signal,
         ),
@@ -208,60 +187,42 @@ export default function App() {
       subscription.remove();
       compactor.stop();
     };
-  }, [session, shareHistory, pending, pairingCode]);
+  }, [sessionId, contextWindow, shareHistory, pending, pairingCode]);
 
-  function handle(operation: () => Promise<Task | void>) {
-    if (submission) return;
-    submission = runSubmission(operation);
-    return submission;
-  }
-
-  async function runSubmission(operation: () => Promise<Task | void>) {
-    compactor.stop();
+  function handle(operation: () => Promise<Task | null | void>) {
+    if (prompts.busy) return;
     revision.current++;
-    setPending(true);
     setStatus('');
-
-    try {
-      const snapshot = await Promise.resolve().then(operation);
-      if (snapshot) updateTask(snapshot);
-    } catch (error) {
-      const failure =
-        error instanceof Error
-          ? error.message
-          : 'Could not complete the request.';
-      setStatus(failure);
-      return failure;
-    } finally {
-      submission = null;
-      setPending(false);
-    }
-  }
-
-  function run(steps: TaskRequest['steps']) {
-    return handle(() =>
-      tasks.submit({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        steps,
-      }),
+    return exclusive(operation)?.then(
+      snapshot => {
+        if (snapshot) updateTask(snapshot);
+      },
+      error =>
+        setStatus(
+          error instanceof Error
+            ? error.message
+            : 'Could not complete the request.',
+        ),
     );
   }
 
   function connect(signIn: boolean) {
     return handle(async () => {
       compactor.report(undefined);
-      setSession(undefined);
-      setShareHistory(false);
-      const bridge = companion(pairingCode.trim());
+      const code = pairingCode.trim();
+      await settings.save({ pairingCode, shareHistory: false });
+      const bridge = companion(code);
       const connection = await (signIn ? bridge.signIn() : bridge.check());
-      setSession(
-        connection.ready && connection.sessionId
-          ? {
-              id: connection.sessionId,
-              budget: contextBudget(connection.contextWindow ?? null),
-            }
-          : undefined,
-      );
+      if (connection.ready && connection.sessionId) {
+        await settings.save({
+          pairingCode,
+          shareHistory: false,
+          session: {
+            id: connection.sessionId,
+            contextWindow: connection.contextWindow ?? null,
+          },
+        });
+      }
       setAnswer(
         connection.error ??
           (connection.ready
@@ -279,90 +240,44 @@ export default function App() {
     });
   }
 
-  async function save(id: string, outcome: Outcome) {
-    try {
-      await conversation.finish(id, outcome);
-      unsaved = null;
-      return true;
-    } catch {
-      unsaved = { id, outcome };
-      return false;
-    }
-  }
-
   function askAgent() {
+    const message = prompt.trim();
+    const screen = shareScreen;
+    setAnswer('');
+    setShareScreen(false);
+    setPrompt('');
     return handle(async () => {
-      compactor.report(undefined);
-      setAnswer('');
-      setShareScreen(false);
-      const message = prompt.trim();
-      if (unsaved) await save(unsaved.id, unsaved.outcome);
-      // Starting succeeds only when no turn is running, so an outcome still unsaved here is stale.
-      const attempt = (startAttempt ??= `${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}`);
-      const id = await conversation.start(message, attempt).catch(error => {
-        setAnswer(
-          error instanceof Error ? error.message : 'Could not save the prompt.',
-        );
-        return null;
-      });
-      if (id === null) return;
-      startAttempt = null;
-      unsaved = null;
-      setPrompt('');
-      promptSavedListeners.forEach(refresh => refresh());
-      await loadHistory().catch(() => {});
-
-      let outcome: Outcome;
       try {
-        const { model } = companion(
-          pairingCode.trim(),
-          session?.id,
-          compactor.report,
-        );
-        const budget = session?.budget ?? contextBudget(null);
-        outcome = {
-          reply: await runAgent(
-            message,
-            model,
-            agentTools(id),
-            shareScreen,
-            shareHistory ? await conversation.context(model, budget) : [],
-            budget,
-          ),
-        };
+        const { outcome, saved } = await ask(message, screen, agentTools);
+        if (!saved) setAnswer(unsavedText(outcome));
       } catch (error) {
-        compactor.report(undefined);
-        setSession(undefined);
-        outcome = {
-          failure:
-            (error instanceof Error && error.message.trim()) ||
-            'The agent stopped.',
-        };
+        setPrompt(message);
+        throw error;
       }
-      if (!(await save(id, outcome))) {
-        setAnswer(unsavedText(outcome));
-      }
-      await loadHistory().catch(() => {});
-      return (await tasks.read()) ?? undefined;
+      return tasks.read();
     });
   }
+
+  const latest = history.slice().reverse();
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={styles.screen}>
-        <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.brand}>Android Agent</Text>
-          {__DEV__ && (
+        <KeyboardAvoidingView behavior="padding" style={styles.screen}>
+          <ScrollView
+            ref={scroll}
+            contentContainerStyle={styles.content}
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+            onContentSizeChange={() => {
+              const newest = history[0]?.id;
+              if (lastScrolledTurn.current === newest) return;
+              lastScrolledTurn.current = newest;
+              scroll.current?.scrollToEnd();
+            }}
+          >
+            <Text style={styles.brand}>Android Agent</Text>
             <View style={styles.panel}>
-              <Text accessibilityRole="header" style={styles.presetText}>
-                Ask Android Agent
-              </Text>
-              <Text style={styles.description}>
-                Connect to the local companion to use your ChatGPT plan.
-              </Text>
               <TextInput
                 accessibilityLabel="Companion pairing code"
                 placeholder="Companion pairing code"
@@ -377,14 +292,18 @@ export default function App() {
                 onChangeText={value => {
                   compactor.stop();
                   compactor.report(undefined);
-                  setPairingCode(value);
-                  setSession(undefined);
-                  setShareHistory(false);
                   setAnswer('');
+                  settings
+                    .save({ pairingCode: value, shareHistory: false })
+                    .catch(() => {});
                 }}
               />
               {!connected && (
                 <>
+                  <Text style={styles.description}>
+                    Pair with the companion on your computer to use your ChatGPT
+                    plan.
+                  </Text>
                   <Pressable
                     accessibilityRole="button"
                     disabled={busy || pairingCode.length !== 32}
@@ -397,266 +316,188 @@ export default function App() {
                     accessibilityRole="button"
                     disabled={busy || pairingCode.length !== 32}
                     onPress={() => connect(false)}
-                    style={styles.preset}
+                    style={styles.secondary}
                   >
-                    <Text style={styles.presetText}>Check connection</Text>
+                    <Text style={styles.label}>Check connection</Text>
                   </Pressable>
                 </>
               )}
               {connected && (
-                <>
-                  <Text style={styles.presetText}>Using ChatGPT plan</Text>
-                  <Pressable
-                    accessibilityRole="checkbox"
-                    accessibilityLabel="Share saved conversation"
-                    accessibilityState={{
-                      checked: shareHistory,
-                      disabled: busy,
-                    }}
-                    disabled={busy}
-                    onPress={() => setShareHistory(value => !value)}
-                    style={[styles.preset, shareHistory && styles.selected]}
-                  >
-                    <Text style={styles.presetText}>
-                      {shareHistory ? '☑' : '☐'} Share saved conversation with
-                      this connection
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel="Share saved conversation"
+                  accessibilityState={{ checked: shareHistory, disabled: busy }}
+                  disabled={busy}
+                  onPress={() =>
+                    settings
+                      .save({ ...config, shareHistory: !shareHistory })
+                      .catch(() => {})
+                  }
+                  style={[styles.secondary, shareHistory && styles.selected]}
+                >
+                  <Text style={styles.label}>
+                    {shareHistory ? '☑' : '☐'} Share saved conversation with
+                    this connection
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+            {earlier && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() =>
+                  loadHistory(history[history.length - 1].id).catch(() =>
+                    setAnswer('Could not load earlier turns.'),
+                  )
+                }
+                style={styles.secondary}
+              >
+                <Text style={styles.label}>Show earlier</Text>
+              </Pressable>
+            )}
+            {latest.map(turn => (
+              <View key={turn.id} style={styles.turn}>
+                <Text selectable style={[styles.message, styles.prompt]}>
+                  {turn.prompt}
+                </Text>
+                <Text selectable style={styles.message}>
+                  {turn.id === prompts.unsaved?.id && turn.status === 'RUNNING'
+                    ? 'Result pending save.'
+                    : turnText(turn)}
+                </Text>
+                {turn.tasks.flatMap(linked =>
+                  linked.request.steps.map(step => (
+                    <Text
+                      key={`${linked.request.id}-${step.id}`}
+                      style={styles.detail}
+                    >
+                      {`${step.id}: ${(task?.request.id === linked.request.id
+                        ? task
+                        : linked
+                      ).states[step.id].phase.toLowerCase()}`}
                     </Text>
-                  </Pressable>
-                  <TextInput
-                    accessibilityLabel="Agent prompt"
-                    placeholder="What should Android do?"
-                    placeholderTextColor="#A4AB9B"
-                    style={styles.input}
-                    maxLength={2_000}
-                    editable={!busy}
-                    value={prompt}
-                    onChangeText={value => {
-                      setPrompt(value);
-                      setShareScreen(false);
-                    }}
-                  />
-                  <Pressable
-                    accessibilityRole="checkbox"
-                    accessibilityLabel="Share screen for this prompt"
-                    accessibilityState={{
-                      checked: shareScreen,
-                      disabled: busy,
-                    }}
-                    disabled={busy}
-                    onPress={() => setShareScreen(value => !value)}
-                    style={[styles.preset, shareScreen && styles.selected]}
-                  >
-                    <Text style={styles.presetText}>
-                      {shareScreen ? '☑' : '☐'} Allow the agent to open an
-                      installed app and share its visible text and controls with
-                      ChatGPT for this prompt
+                  )),
+                )}
+              </View>
+            ))}
+            {task && (
+              <View style={styles.panel}>
+                <Text accessibilityRole="header" style={styles.label}>
+                  Latest task
+                </Text>
+                {task.request.steps.map(step => {
+                  const { phase, detail, result } = task.states[step.id];
+                  return (
+                    <Text
+                      key={step.id}
+                      accessibilityLiveRegion="polite"
+                      style={styles.description}
+                    >
+                      {`${step.id}: ${phase.toLowerCase()}`}
+                      {detail && ` · ${detail}`}
+                      {result?.type === 'window' &&
+                        result.active &&
+                        (phase === 'UNKNOWN'
+                          ? ` · ${
+                              appLabels[result.app]
+                            } was active during recovery`
+                          : ` · ${appLabels[result.app]} window verified`)}
+                      {result?.type === 'matches' &&
+                        (result.apps.length === 0
+                          ? ' · No matching app'
+                          : ` · ${result.apps
+                              .map(app => appLabels[app])
+                              .join(', ')}`)}
                     </Text>
-                  </Pressable>
+                  );
+                })}
+                {paused && (
                   <Pressable
                     accessibilityRole="button"
-                    disabled={busy || !prompt.trim()}
-                    onPress={() => {
-                      askAgent();
-                    }}
+                    disabled={pending}
                     style={styles.button}
+                    onPress={() => handle(() => tasks.resume(task.request.id))}
                   >
-                    <Text style={styles.buttonText}>Run prompt</Text>
+                    <Text style={styles.buttonText}>Continue task</Text>
                   </Pressable>
-                </>
-              )}
-              {!!answer && (
-                <Text
-                  accessibilityLiveRegion="polite"
-                  style={styles.description}
-                >
-                  {answer}
+                )}
+                {(running || paused) && !task.cancelled && (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={pending}
+                    style={styles.secondary}
+                    onPress={() => handle(() => tasks.cancel(task.request.id))}
+                  >
+                    <Text style={styles.label}>Cancel remaining steps</Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+            {!!answer && (
+              <Text accessibilityLiveRegion="polite" style={styles.description}>
+                {answer}
+              </Text>
+            )}
+            {!!status && (
+              <Text accessibilityLiveRegion="polite" style={styles.description}>
+                {status}
+              </Text>
+            )}
+          </ScrollView>
+          {connected && (
+            <View style={styles.composer}>
+              <Pressable
+                accessibilityRole="checkbox"
+                accessibilityLabel="Share screen for this prompt"
+                accessibilityState={{ checked: shareScreen, disabled: busy }}
+                disabled={busy}
+                onPress={() => setShareScreen(value => !value)}
+              >
+                <Text style={styles.detail}>
+                  {shareScreen ? '☑' : '☐'} Allow the agent to open an installed
+                  app and share its visible text and controls with ChatGPT for
+                  this prompt
                 </Text>
-              )}
-              {history.length > 0 && (
-                <View style={styles.history}>
-                  <Text accessibilityRole="header" style={styles.presetText}>
-                    Conversation
-                  </Text>
-                  {earlier && (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() =>
-                        loadHistory(history[history.length - 1].id).catch(() =>
-                          setAnswer('Could not load earlier turns.'),
-                        )
-                      }
-                      style={styles.preset}
-                    >
-                      <Text style={styles.presetText}>Show earlier</Text>
-                    </Pressable>
-                  )}
-                  {history
-                    .slice()
-                    .reverse()
-                    .map(turn => (
-                      <View key={turn.id} style={styles.turn}>
-                        <Text style={styles.presetText}>You</Text>
-                        <Text selectable style={styles.description}>
-                          {turn.prompt}
-                        </Text>
-                        <Text style={styles.presetText}>Android Agent</Text>
-                        <Text selectable style={styles.description}>
-                          {turn.id === unsaved?.id && turn.status === 'RUNNING'
-                            ? 'Result pending save.'
-                            : turnText(turn)}
-                        </Text>
-                        {turn.tasks.flatMap(linked =>
-                          linked.request.steps.map(step => (
-                            <Text
-                              key={`${linked.request.id}-${step.id}`}
-                              style={styles.description}
-                            >
-                              {`${step.id}: ${(task?.request.id ===
-                              linked.request.id
-                                ? task
-                                : linked
-                              ).states[step.id].phase.toLowerCase()}`}
-                            </Text>
-                          )),
-                        )}
-                      </View>
-                    ))}
-                </View>
-              )}
-            </View>
-          )}
-          <Text accessibilityRole="header" style={styles.title}>
-            Set a timer
-          </Text>
-          <Text style={styles.description}>
-            Choose a duration and send it to your device’s clock app.
-          </Text>
-
-          <View style={styles.panel}>
-            <Text style={styles.duration}>{minutes} min</Text>
-            <View style={styles.presets}>
-              {durations.map(duration => (
+              </Pressable>
+              <View style={styles.row}>
+                <TextInput
+                  accessibilityLabel="Agent prompt"
+                  placeholder="What should Android do?"
+                  placeholderTextColor="#A4AB9B"
+                  style={[styles.input, styles.grow]}
+                  multiline
+                  maxLength={2_000}
+                  editable={!busy}
+                  value={prompt}
+                  onChangeText={value => {
+                    setPrompt(value);
+                    setShareScreen(false);
+                  }}
+                />
                 <Pressable
-                  key={duration}
-                  accessibilityRole="radio"
-                  accessibilityState={{
-                    checked: duration === minutes,
-                    disabled: busy,
-                  }}
-                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Run prompt"
+                  disabled={busy || !prompt.trim()}
                   onPress={() => {
-                    setMinutes(duration);
-                    setStatus('');
+                    askAgent();
                   }}
-                  style={({ pressed }) => [
-                    styles.preset,
-                    duration === minutes && styles.selected,
-                    pressed && styles.pressed,
-                  ]}
+                  style={styles.button}
                 >
-                  <Text style={styles.presetText}>{duration} min</Text>
+                  <Text style={styles.buttonText}>Send</Text>
                 </Pressable>
-              ))}
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ disabled: busy, busy: pending }}
-              disabled={busy}
-              onPress={() =>
-                run([
-                  {
-                    id: 'timer',
-                    action: { type: 'clock.startTimer', seconds: minutes * 60 },
-                  },
-                ])
-              }
-              style={({ pressed }) => [
-                styles.button,
-                (pressed || pending) && styles.pressed,
-              ]}
-            >
-              <Text style={styles.buttonText}>Start timer</Text>
-            </Pressable>
-          </View>
-          <View style={styles.panel}>
-            <Text accessibilityRole="header" style={styles.presetText}>
-              Google Maps
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={() => run(mapsSteps())}
-              style={styles.button}
-            >
-              <Text style={styles.buttonText}>Find and open Google Maps</Text>
-            </Pressable>
-            {__DEV__ && (
+              </View>
               <Pressable
                 accessibilityRole="button"
                 onPress={() => handle(tasks.openAccessibilitySettings)}
-                style={styles.preset}
               >
-                <Text style={styles.presetText}>Accessibility settings</Text>
+                <Text style={styles.detail}>
+                  Screen sharing needs Android Agent window verification in
+                  Accessibility settings.
+                </Text>
               </Pressable>
-            )}
-          </View>
-          {task && (
-            <View style={styles.panel}>
-              <Text accessibilityRole="header" style={styles.presetText}>
-                Latest task
-              </Text>
-              {task.request.steps.map(step => {
-                const { phase, detail, result } = task.states[step.id];
-                return (
-                  <Text
-                    key={step.id}
-                    accessibilityLiveRegion="polite"
-                    style={styles.description}
-                  >
-                    {`${step.id}: ${phase.toLowerCase()}`}
-                    {detail && ` · ${detail}`}
-                    {result?.type === 'window' &&
-                      result.active &&
-                      (phase === 'UNKNOWN'
-                        ? ` · ${
-                            appLabels[result.app]
-                          } was active during recovery`
-                        : ` · ${appLabels[result.app]} window verified`)}
-                    {result?.type === 'matches' &&
-                      (result.apps.length === 0
-                        ? ' · No matching app'
-                        : ` · ${result.apps
-                            .map(app => appLabels[app])
-                            .join(', ')}`)}
-                  </Text>
-                );
-              })}
-              {paused && (
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={pending}
-                  style={styles.button}
-                  onPress={() => handle(() => tasks.resume(task.request.id))}
-                >
-                  <Text style={styles.buttonText}>Continue task</Text>
-                </Pressable>
-              )}
-              {(running || paused) && !task.cancelled && (
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={pending}
-                  style={styles.preset}
-                  onPress={() => handle(() => tasks.cancel(task.request.id))}
-                >
-                  <Text style={styles.presetText}>Cancel remaining steps</Text>
-                </Pressable>
-              )}
             </View>
           )}
-          <Text accessibilityLiveRegion="polite" style={styles.status}>
-            {status}
-          </Text>
-        </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -684,32 +525,47 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#151613' },
   content: {
     width: '100%',
-    maxWidth: 520,
+    maxWidth: 560,
     alignSelf: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 24,
+    padding: 20,
+    gap: 16,
   },
   brand: { color: '#C9F37B', fontSize: 16, fontWeight: '600' },
-  title: { color: '#FBFAF4', fontSize: 44, fontWeight: '700', marginTop: 28 },
-  description: { color: '#C5C9BD', fontSize: 16, lineHeight: 24, marginTop: 8 },
+  description: { color: '#C5C9BD', fontSize: 15, lineHeight: 22 },
+  detail: { color: '#A4AB9B', fontSize: 13, lineHeight: 18 },
   panel: {
     backgroundColor: '#22251E',
     borderColor: '#3B4133',
     borderWidth: 1,
-    borderRadius: 24,
-    marginTop: 28,
-    padding: 20,
-    gap: 16,
+    borderRadius: 20,
+    padding: 16,
+    gap: 12,
   },
-  duration: {
+  turn: { gap: 8 },
+  message: {
     color: '#FBFAF4',
-    fontSize: 52,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
+    fontSize: 16,
+    lineHeight: 23,
+    backgroundColor: '#22251E',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignSelf: 'flex-start',
+    maxWidth: '88%',
   },
-  presets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  preset: {
+  prompt: { backgroundColor: '#3A472D', alignSelf: 'flex-end' },
+  composer: {
+    borderTopWidth: 1,
+    borderColor: '#3B4133',
+    padding: 12,
+    gap: 8,
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+  },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  grow: { flex: 1, maxHeight: 140 },
+  secondary: {
     borderColor: '#67725E',
     borderWidth: 1,
     borderRadius: 12,
@@ -726,19 +582,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     minHeight: 48,
   },
-  history: { gap: 12 },
-  turn: { borderTopWidth: 1, borderColor: '#3B4133', paddingTop: 12, gap: 4 },
   selected: { backgroundColor: '#3A472D', borderColor: '#C9F37B' },
-  presetText: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },
+  label: { color: '#FBFAF4', fontSize: 15, fontWeight: '600' },
   button: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#C9F37B',
     borderRadius: 14,
-    minHeight: 52,
-    padding: 12,
+    minHeight: 48,
+    paddingHorizontal: 16,
   },
   buttonText: { color: '#19220F', fontSize: 16, fontWeight: '700' },
-  pressed: { opacity: 0.72 },
-  status: { color: '#C5C9BD', fontSize: 15, lineHeight: 22, marginTop: 16 },
 });

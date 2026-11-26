@@ -25,6 +25,9 @@ export interface Spec extends TurboModule {
   ): Promise<string>;
   stopUi(): Promise<void>;
   openAccessibilitySettings(): Promise<void>;
+  readSettings(): Promise<string | null>;
+  saveSettings(settings: string): Promise<void>;
+  finishVoiceTurn(id: string, text: string, failed: boolean): Promise<void>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeTasks');

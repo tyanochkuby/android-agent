@@ -31,6 +31,9 @@ jest.mock('../src/native/NativeTasks', () => ({
     startTurn: jest.fn(),
     completeTurn: jest.fn(),
     failTurn: jest.fn(),
+    readSettings: jest.fn(),
+    saveSettings: jest.fn(),
+    finishVoiceTurn: jest.fn(),
   },
 }));
 
@@ -58,7 +61,16 @@ function finish(status: string, field: 'reply' | 'detail') {
   };
 }
 
+let storedSettings: string | null;
+
 beforeEach(() => {
+  storedSettings = null;
+  jest
+    .mocked(NativeTasks.readSettings)
+    .mockImplementation(async () => storedSettings);
+  jest.mocked(NativeTasks.saveSettings).mockImplementation(async value => {
+    storedSettings = value;
+  });
   submit.mockReset();
   read.mockReset();
   resume.mockReset();
@@ -137,65 +149,6 @@ async function ask(prompt: string) {
   await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
 }
 
-test('reports a selected timer as issued', async () => {
-  submit.mockImplementation(async json =>
-    JSON.stringify({
-      request: JSON.parse(json),
-      states: {
-        timer: { phase: 'ISSUED', detail: 'Check Clock for the countdown.' },
-      },
-    }),
-  );
-
-  await render(<App />);
-  await fireEvent.press(screen.getByRole('radio', { name: '5 min' }));
-  await fireEvent.press(screen.getByRole('button', { name: 'Start timer' }));
-
-  expect(JSON.parse(submit.mock.calls[0][0]).steps).toEqual([
-    { id: 'timer', action: { type: 'clock.startTimer', seconds: 300 } },
-  ]);
-  expect(
-    screen.getByText('timer: issued · Check Clock for the countdown.'),
-  ).toBeTruthy();
-});
-
-test('submits a batch binding the app selection to its search output', async () => {
-  submit.mockImplementation(async json =>
-    JSON.stringify({
-      request: JSON.parse(json),
-      states: {
-        find: {
-          phase: 'SUCCEEDED',
-          result: { type: 'matches', apps: ['MAPS'] },
-        },
-        open: {
-          phase: 'SUCCEEDED',
-          result: { type: 'window', app: 'MAPS', active: true, observedAt: 1 },
-        },
-      },
-    }),
-  );
-
-  await render(<App />);
-  await fireEvent.press(
-    screen.getByRole('button', { name: 'Find and open Google Maps' }),
-  );
-
-  expect(JSON.parse(submit.mock.calls[0][0]).steps).toEqual([
-    { id: 'find', action: { type: 'apps.search', query: 'Google Maps' } },
-    {
-      id: 'open',
-      action: {
-        type: 'apps.open',
-        target: { type: 'fromSearch', stepId: 'find' },
-      },
-    },
-  ]);
-  expect(
-    screen.getByText('open: succeeded · Google Maps window verified'),
-  ).toBeTruthy();
-});
-
 test('a paused task requires an explicit continuation', async () => {
   const request: TaskRequest = {
     id: 'restored',
@@ -214,22 +167,26 @@ test('a paused task requires an explicit continuation', async () => {
   expect(resume).toHaveBeenCalledWith('restored');
 });
 
-test('shows a submission error and allows another request', async () => {
-  submit.mockRejectedValueOnce(new Error('Could not save the task.'));
-  submit.mockImplementation(async json =>
-    JSON.stringify({
-      request: JSON.parse(json),
-      states: { timer: { phase: 'ISSUED' } },
-    }),
+test('shows a request error and allows another request', async () => {
+  const request: TaskRequest = {
+    id: 'restored',
+    steps: [{ id: 'timer', action: { type: 'clock.startTimer', seconds: 60 } }],
+  };
+  read.mockResolvedValue(
+    JSON.stringify({ request, states: { timer: { phase: 'PAUSED' } } }),
+  );
+  resume.mockRejectedValueOnce(new Error('Could not resume the task.'));
+  resume.mockResolvedValue(
+    JSON.stringify({ request, states: { timer: { phase: 'ISSUED' } } }),
   );
 
   await render(<App />);
-  await fireEvent.press(screen.getByRole('button', { name: 'Start timer' }));
-  expect(screen.getByText('Could not save the task.')).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue task' }));
+  expect(screen.getByText('Could not resume the task.')).toBeTruthy();
 
-  await fireEvent.press(screen.getByRole('button', { name: 'Start timer' }));
-  expect(submit).toHaveBeenCalledTimes(2);
-  expect(screen.queryByText('Could not save the task.')).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Continue task' }));
+  expect(resume).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('Could not resume the task.')).toBeNull();
 });
 
 test('foreground events share an in-flight status read', async () => {
@@ -474,8 +431,8 @@ test.each([
     await ask('First prompt');
     expect(screen.getByText(/Could not save this result/)).toBeTruthy();
     await mounted.unmount();
+    // The connection is saved on the device, so the new screen is already connected.
     await render(<App />);
-    await connectCompanion(model);
     await ask('Second prompt');
   } finally {
     bridge.mockRestore();
