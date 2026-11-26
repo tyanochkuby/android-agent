@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
+class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec(context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val application = context.applicationContext as MainApplication
   private val executor = application.taskExecutor
@@ -199,6 +199,7 @@ class TaskModule(context: ReactApplicationContext) : NativeTasksSpec(context) {
   }
 
   override fun invalidate() {
+    VoiceTurns.invalidate(context)
     closeUi()
     scope.cancel()
     super.invalidate()
