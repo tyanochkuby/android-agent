@@ -26,6 +26,7 @@ import {
   connectedModel,
   exclusive,
   prompts,
+  recoverChatGPTConnection,
 } from './src/prompts';
 import { emptySettings, settings } from './src/settings';
 import type { Settings } from './src/settings';
@@ -198,18 +199,7 @@ export default function App() {
             try {
               return await model(...input);
             } catch (error) {
-              if (direct && !(await chatgpt.status())?.signedIn) {
-                await exclusive(async () => {
-                  const { session: saved } = await settings.read();
-                  if (
-                    saved?.chatgpt &&
-                    saved.id === sessionId &&
-                    !(await chatgpt.status())?.signedIn
-                  ) {
-                    await settings.disconnect();
-                  }
-                });
-              }
+              if (direct) await recoverChatGPTConnection(sessionId);
               throw error;
             }
           },

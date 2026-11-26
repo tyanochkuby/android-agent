@@ -54,6 +54,22 @@ export function exclusive<T>(operation: () => Promise<T>) {
   return run;
 }
 
+// Recheck after foreground work settles, since it may have signed in or switched connections.
+export async function recoverChatGPTConnection(account: string) {
+  if ((await chatgpt.status())?.signedIn) return;
+  while (current) await current.catch(() => {});
+  await exclusive(async () => {
+    const { session } = await settings.read();
+    if (
+      session?.chatgpt &&
+      session.id === account &&
+      !(await chatgpt.status())?.signedIn
+    ) {
+      await settings.disconnect();
+    }
+  });
+}
+
 // The model of `session`. With `live`, the request is background work that `live` aborts; on the
 // companion it then runs only on an already open model connection.
 export function connectedModel(
