@@ -191,13 +191,32 @@ export default function App() {
     const budget = contextBudget(contextWindow);
     const live = { id: sessionId, contextWindow, chatgpt: direct };
     const compactWhenIdle = () =>
-      compactor.start(signal =>
-        conversation.compactIdle(
-          connectedModel(pairingCode, live, undefined, signal, true),
+      compactor.start(signal => {
+        const model = connectedModel(pairingCode, live, undefined, signal, true);
+        return conversation.compactIdle(
+          async (...input) => {
+            try {
+              return await model(...input);
+            } catch (error) {
+              if (direct && !(await chatgpt.status())?.signedIn) {
+                await exclusive(async () => {
+                  const { session: saved } = await settings.read();
+                  if (
+                    saved?.chatgpt &&
+                    saved.id === sessionId &&
+                    !(await chatgpt.status())?.signedIn
+                  ) {
+                    await settings.disconnect();
+                  }
+                });
+              }
+              throw error;
+            }
+          },
           budget,
           signal,
-        ),
-      );
+        );
+      });
     if (AppState.currentState === 'active') compactWhenIdle();
     const subscription = AppState.addEventListener('change', state =>
       state === 'active' ? compactWhenIdle() : compactor.stop(),

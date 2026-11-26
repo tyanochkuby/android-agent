@@ -112,35 +112,27 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
   private suspend fun authorize(open: suspend (String) -> Unit): Connection {
     val saved = vault.read()
     if (saved.session != null) throw ChatGPTException("signed_in", "You are already signed in with ChatGPT.")
-    var clientId = saved.clientId
     Loopback().use { loopback ->
-      repeat(2) { attempt ->
-        val registering = clientId == null
-        val request = authorization(
-          AUTHORIZE_URL, loopback.redirectUri, clientId, saved.hostId,
-          saved.email.takeIf { !registering }, saved.planUsageDeclined,
-        )
-        open(request.url)
-        val (code, issued) = callbackResult(loopback.await(request.state) { cancelled }, clientId)
-        // The registration is saved before the exchange, so a failed exchange reuses it.
-        if (registering) lock.withLock { vault.write(vault.read().copy(clientId = issued)) }
-        clientId = issued
-        val exchange = post(
-          TOKEN_URL,
-          form(
-            "grant_type" to "authorization_code", "client_id" to issued, "code" to code,
-            "code_verifier" to request.verifier, "redirect_uri" to loopback.redirectUri, "resource" to RESOURCE,
-          ),
-        )
-        if (exchange.status !in 200..299) {
-          val error = apiError(exchange.body, exchange.status)
-          if (error.code == "invalid_grant" && registering && attempt == 0) return@repeat
-          throw error
-        }
-        return finishSignIn(exchange.body as? JsonObject ?: JsonObject(emptyMap()), issued, request.nonce)
+      val request = authorization(
+        AUTHORIZE_URL, loopback.redirectUri, saved.clientId, saved.hostId,
+        saved.email.takeIf { saved.clientId != null }, saved.planUsageDeclined,
+      )
+      open(request.url)
+      val (code, issued) = callbackResult(loopback.await(request.state) { cancelled }, saved.clientId)
+      // A new sign-in attempt reuses the registration if the exchange fails.
+      if (saved.clientId == null) lock.withLock { vault.write(vault.read().copy(clientId = issued)) }
+      val exchange = post(
+        TOKEN_URL,
+        form(
+          "grant_type" to "authorization_code", "client_id" to issued, "code" to code,
+          "code_verifier" to request.verifier, "redirect_uri" to loopback.redirectUri, "resource" to RESOURCE,
+        ),
+      )
+      if (exchange.status !in 200..299) {
+        throw apiError(exchange.body, exchange.status)
       }
+      return finishSignIn(exchange.body as? JsonObject ?: JsonObject(emptyMap()), issued, request.nonce)
     }
-    throw ChatGPTException("invalid_grant", "ChatGPT did not accept the sign-in. Sign in with ChatGPT again.")
   }
 
   private suspend fun finishSignIn(body: JsonObject, clientId: String, nonce: String): Connection {
