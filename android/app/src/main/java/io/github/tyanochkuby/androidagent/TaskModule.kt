@@ -191,12 +191,20 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     screenAccessActive(grant).toString()
   }
 
+  private val typedGrants = mutableSetOf<String>()
+  private var invalidated = false
+
   override fun beginTypedScreenAccess(promise: Promise) = respond(promise) {
-    if (ScreenConsent.enabled(context)) ScreenGrants.grant().id else null
+    synchronized(typedGrants) {
+      check(!invalidated) { "The agent runtime ended." }
+      if (ScreenConsent.enabled(context)) ScreenGrants.grant().id.also { typedGrants.add(it) } else null
+    }
   }
 
   override fun endTypedScreenAccess(grant: String, promise: Promise) = respond(promise) {
-    ScreenGrants.revoke(grant)
+    synchronized(typedGrants) {
+      if (typedGrants.remove(grant)) ScreenGrants.revoke(grant)
+    }
     null
   }
 
@@ -386,6 +394,11 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   }
 
   override fun invalidate() {
+    synchronized(typedGrants) {
+      invalidated = true
+      typedGrants.forEach(ScreenGrants::revoke)
+      typedGrants.clear()
+    }
     VoiceTurns.invalidate(context)
     closeUi()
     scope.cancel()
