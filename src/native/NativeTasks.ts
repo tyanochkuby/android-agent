@@ -33,6 +33,8 @@ export interface Spec extends TurboModule {
   ): Promise<string>;
   stopUi(): Promise<void>;
   // "true" or "false".
+  beginTypedScreenAccess(): Promise<string | null>;
+  endTypedScreenAccess(grant: string): Promise<void>;
   screenSharing(): Promise<string>;
   setScreenSharing(enabled: boolean): Promise<void>;
   screenAccessActive(grant: string | null): Promise<string>;

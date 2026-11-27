@@ -36,6 +36,7 @@ jest.mock('../src/native/NativeTasks', () => ({
     saveSettings: jest.fn(),
     finishVoiceTurn: jest.fn(),
     speechModelStatus: jest.fn(async () => null),
+    beginTypedScreenAccess: jest.fn(async () => null),
     screenSharing: jest.fn(async () => 'false'),
     setScreenSharing: jest.fn(async () => {}),
     captureUi: jest.fn(),

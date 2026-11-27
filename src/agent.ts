@@ -128,7 +128,7 @@ open_app switches to another app and ends access to the previous one. The latest
 
 // Whether screen sharing is on for a request. A source is the app the user asked from; the session starts there and
 // can switch apps.
-export type Screen = boolean | { source: string; grant?: string };
+export type Screen = boolean | { source?: string; grant?: string };
 
 // Matches the native setting's message.
 export class ScreenAccessEnded extends Error {}

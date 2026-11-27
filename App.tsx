@@ -351,9 +351,17 @@ export default function App() {
     setPrompt('');
     return handle(async () => {
       try {
-        const screen = (await NativeTasks.screenSharing()) === 'true';
-        const { outcome, saved } = await ask(message, screen, agentTools);
-        if (!saved) setAnswer(unsavedText(outcome));
+        const grant = await NativeTasks.beginTypedScreenAccess();
+        try {
+          const { outcome, saved } = await ask(
+            message,
+            grant ? { grant } : false,
+            turn => agentTools(turn, grant),
+          );
+          if (!saved) setAnswer(unsavedText(outcome));
+        } finally {
+          if (grant) await NativeTasks.endTypedScreenAccess(grant);
+        }
       } catch (error) {
         setPrompt(message);
         throw error;

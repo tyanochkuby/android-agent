@@ -191,6 +191,15 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     screenAccessActive(grant).toString()
   }
 
+  override fun beginTypedScreenAccess(promise: Promise) = respond(promise) {
+    if (ScreenConsent.enabled(context)) ScreenGrants.grant().id else null
+  }
+
+  override fun endTypedScreenAccess(grant: String, promise: Promise) = respond(promise) {
+    ScreenGrants.revoke(grant)
+    null
+  }
+
   /** Turning sharing off ends any open UI session and deletes every kept screenshot. */
   override fun setScreenSharing(enabled: Boolean, promise: Promise) = respond(promise) {
     ScreenConsent.set(context, enabled)
@@ -287,20 +296,21 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
     check(uiSession == null) { "Close the current UI session first." }
     val observer = checkNotNull(WindowObserver.connected) { "Enable Android Agent in Accessibility settings." }
-    if (grant != null) {
-      return@respond if (Build.VERSION.SDK_INT >= 36) startGrantedUi(app, grant, attachOnly, observer)
+    val access = grant?.let { checkNotNull(ScreenGrants.active(it)) { "Screen access for this request ended." } }
+    if (access?.source != null) {
+      return@respond if (Build.VERSION.SDK_INT >= 36) startGrantedUi(app, access.id, attachOnly, observer)
       else error("Screen sharing for voice requests needs Android 16.")
     }
     val foreground = checkNotNull(MainActivity.foregroundSession) { "Open Android Agent first." }
     require(app.matches(PACKAGE_NAME) && app != foreground.activity.packageName) { "Choose a valid external app." }
-    val session = UiSession(observer, app) { screenAccessActive(null) }
+    val session = UiSession(observer, app) { screenAccessActive(grant) }
     uiSession = session
     try {
       check(executor.read(null)?.finished != false) { "Finish the current task first." }
       check(MainActivity.foregroundSession === foreground && WindowObserver.connected === observer && uiSession === session) {
         "Return to Android Agent and start the workflow again."
       }
-      check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+      check(screenAccessActive(grant)) { "Screen access for this request ended." }
       val activity = foreground.activity
       if (Build.VERSION.SDK_INT >= 33) {
         activity.startIntentSender(activity.packageManager.getLaunchIntentSenderForPackage(app), null, 0, 0, 0)

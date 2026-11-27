@@ -22,16 +22,15 @@ internal object ScreenConsent {
 }
 
 /**
- * Screen access for one voice request, starting from the app [source] that was in front when the user finished
- * speaking. Granted only while [ScreenConsent] is on. A grant lets that request read [source] and open other apps until
- * it is revoked or expires. Use on the main thread.
+ * Screen access for one request. A voice grant has a source app and permits background launches.
+ * Typed grants have no source and require Android Agent in front to open an app.
  */
 internal object ScreenGrants {
-  data class Grant(val id: String, val source: String, val expiresAt: Long)
+  data class Grant(val id: String, val source: String?, val expiresAt: Long)
 
   private val grants = java.util.concurrent.ConcurrentHashMap<String, Grant>()
 
-  fun grant(source: String) = Grant(UUID.randomUUID().toString(), source, SystemClock.elapsedRealtime() + LIFETIME_MS)
+  fun grant(source: String? = null) = Grant(UUID.randomUUID().toString(), source, SystemClock.elapsedRealtime() + LIFETIME_MS)
     .also { grants[it.id] = it }
 
   fun active(id: String) = grants[id]?.takeIf { SystemClock.elapsedRealtime() < it.expiresAt }
