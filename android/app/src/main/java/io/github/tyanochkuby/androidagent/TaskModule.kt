@@ -216,12 +216,10 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     val capture = session.capture() ?: return@respond null
     check(uiSession === session && session.hasAccess()) { "Screen sharing ended during the capture." }
     val screenshot = withContext(Dispatchers.IO) {
-      synchronized(screenshots) {
+      screenshots.save(owner, capture.app, capture.jpeg) {
         check(session.hasAccess() && owner() == owner) { "Screen sharing ended during the capture." }
-        screenshots.save(owner, capture.app, capture.jpeg)
       }
     }
-    check(uiSession === session && session.hasAccess()) { "Screen sharing ended during the capture." }
     taskJson.encodeToString(CapturedScreen(screenshot, capture.snapshot))
   }
 

@@ -337,6 +337,12 @@ export async function runAgent(
     if (!shareScreen) throw new Error(sharingOff);
   }
 
+  async function ensureScreenAccess() {
+    if (tools.screenStillAllowed && !(await tools.screenStillAllowed())) {
+      throw new ScreenAccessEnded('Screen access for this request ended.');
+    }
+  }
+
   // The source app is read only once the model asks to use the screen.
   async function openedApp() {
     if (!app && source && !opened.size) await openApp(source, true);
@@ -465,12 +471,8 @@ export async function runAgent(
             : 'This request grew past its size limit. Check the device for any actions already taken.',
         );
       }
-      if (
-        input.some(message => message.screenData) &&
-        tools.screenStillAllowed &&
-        !(await tools.screenStillAllowed())
-      ) {
-        throw new ScreenAccessEnded('Screen access for this request ended.');
+      if (input.some(message => message.screenData)) {
+        await ensureScreenAccess();
       }
       const raw = await model(
         instructions,
@@ -509,6 +511,8 @@ export async function runAgent(
           });
           break;
         }
+        const usesScreen = shareScreen && decision.tool !== 'start_timer';
+        if (usesScreen) await ensureScreenAccess();
         attempted++;
         try {
           const result = {
@@ -534,6 +538,7 @@ export async function runAgent(
           }
         } catch (error) {
           failed++;
+          if (usesScreen) await ensureScreenAccess();
           if (!(error instanceof ScreenChanged))
             failedCalls.set(call, screenKey());
           results.push({

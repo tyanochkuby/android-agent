@@ -30,7 +30,7 @@ internal class Screenshots(
   private val random = SecureRandom()
 
   @Synchronized
-  fun save(owner: String, app: String, jpeg: ByteArray): Screenshot {
+  fun save(owner: String, app: String, jpeg: ByteArray, beforePublish: () -> Unit = {}): Screenshot {
     require(app.matches(PACKAGE_NAME)) { "Invalid app." }
     val time = clock()
     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).apply { timeZone = UTC }.format(Date(time))
@@ -39,8 +39,19 @@ internal class Screenshots(
     val dir = File(root, key(owner)).apply { mkdirs() }
     val file = File(dir, "$id$SEPARATOR$app.jpg")
     val partial = File(dir, "${file.name}.partial")
-    partial.writeBytes(jpeg)
-    check(partial.renameTo(file)) { "Could not save the screenshot." }
+    try {
+      partial.writeBytes(jpeg)
+      beforePublish()
+      check(partial.renameTo(file)) { "Could not save the screenshot." }
+      try {
+        beforePublish()
+      } catch (error: Exception) {
+        file.delete()
+        throw error
+      }
+    } finally {
+      partial.delete()
+    }
     file.setLastModified(time)
     evict()
     return Screenshot(id, app, iso(time))
