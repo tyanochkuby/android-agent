@@ -36,7 +36,12 @@ class Status(val account: String, val email: String?, val signedIn: Boolean)
  * Signs in with ChatGPT on this device and answers prompts on the account's plan.
  * Credentials never leave this class, and no token or reply text is logged.
  */
-class ChatGPT(context: Context, private val clock: () -> Long = System::currentTimeMillis) {
+/** [screenshot] reads a stored screenshot by owner and ID for image input. */
+class ChatGPT(
+  context: Context,
+  private val screenshot: (owner: String, id: String) -> ByteArray? = { _, _ -> null },
+  private val clock: () -> Long = System::currentTimeMillis,
+) {
   private val vault = Vault(context)
   // Serializes refreshes and account changes, so a rotated refresh token is used once.
   private val lock = Mutex()
@@ -88,7 +93,9 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
       throw ChatGPTException("account_changed", "The ChatGPT account changed. Continue with ChatGPT again.")
     }
     val model = account.model ?: throw ChatGPTException("not_connected", "Continue with ChatGPT in Android Agent.")
-    val body = responsesBody(model, instructions, Json.parseToJsonElement(input) as JsonArray)
+    val body = responsesBody(model, instructions, Json.parseToJsonElement(input) as JsonArray) {
+      screenshot("chatgpt:$subject", it)
+    }
     withContext(Dispatchers.IO) {
       if (!canSendHistory()) {
         throw ChatGPTException("history_sharing_off", "Sharing earlier conversation is off.")

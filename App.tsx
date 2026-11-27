@@ -47,7 +47,7 @@ export default function App() {
   const [speechError, setSpeechError] = useState('');
   const [signingIn, setSigningIn] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [shareScreen, setShareScreen] = useState(false);
+  const [screenSharing, setScreenSharing] = useState(false);
   const [answer, setAnswer] = useState('');
   const [history, setHistory] = useState<Turn[]>([]);
   const [olderPage, setOlderPage] = useState<boolean | null>(null);
@@ -107,6 +107,9 @@ export default function App() {
     let active = true;
     NativeTasks.speechModelStatus()
       .then(saved => active && setSpeechModel(saved))
+      .catch(() => {});
+    NativeTasks.screenSharing()
+      .then(saved => active && setScreenSharing(saved === 'true'))
       .catch(() => {});
     const unsubscribeSettings = settings.subscribe(setConfig);
     settings
@@ -344,12 +347,11 @@ export default function App() {
 
   function askAgent() {
     const message = prompt.trim();
-    const screen = shareScreen;
     setAnswer('');
-    setShareScreen(false);
     setPrompt('');
     return handle(async () => {
       try {
+        const screen = (await NativeTasks.screenSharing()) === 'true';
         const { outcome, saved } = await ask(message, screen, agentTools);
         if (!saved) setAnswer(unsavedText(outcome));
       } catch (error) {
@@ -539,6 +541,28 @@ export default function App() {
                   </Text>
                 </>
               )}
+              <Pressable
+                accessibilityRole="switch"
+                accessibilityLabel="Share screen with the agent"
+                accessibilityState={{ checked: screenSharing }}
+                // Turning it off also works mid-request and ends any open app session.
+                onPress={() =>
+                  NativeTasks.setScreenSharing(!screenSharing).then(
+                    () => setScreenSharing(!screenSharing),
+                    () => setStatus('Could not change screen sharing.'),
+                  )
+                }
+                style={[styles.secondary, screenSharing && styles.selected]}
+              >
+                <Text style={styles.label}>
+                  {screenSharing ? '☑' : '☐'} Share screen with the agent
+                </Text>
+              </Pressable>
+              <Text style={styles.detail}>
+                {screenSharing
+                  ? 'Typed and spoken prompts can open apps, act in them, and send their visible text and screenshots to the connected model. Screenshots the agent takes stay on this phone for later prompts, up to 24, and are deleted when you turn this off or sign out.'
+                  : 'Off. The agent cannot read or act in other apps.'}
+              </Text>
             </View>
             {earlier && (
               <Pressable
@@ -644,19 +668,6 @@ export default function App() {
           </ScrollView>
           {connected && (
             <View style={styles.composer}>
-              <Pressable
-                accessibilityRole="checkbox"
-                accessibilityLabel="Share screen for this prompt"
-                accessibilityState={{ checked: shareScreen, disabled: busy }}
-                disabled={busy}
-                onPress={() => setShareScreen(value => !value)}
-              >
-                <Text style={styles.detail}>
-                  {shareScreen ? '☑' : '☐'} Allow the agent to open an installed
-                  app and share its visible text and controls with ChatGPT for
-                  this prompt
-                </Text>
-              </Pressable>
               <View style={styles.row}>
                 <TextInput
                   accessibilityLabel="Agent prompt"
@@ -667,10 +678,7 @@ export default function App() {
                   maxLength={2_000}
                   editable={!busy}
                   value={prompt}
-                  onChangeText={value => {
-                    setPrompt(value);
-                    setShareScreen(false);
-                  }}
+                  onChangeText={setPrompt}
                 />
                 <Pressable
                   accessibilityRole="button"

@@ -3,6 +3,11 @@ import { Button, StyleSheet, Text, View } from 'react-native';
 import { openStationDirections } from './mapsWorkflow';
 import { actOn, runUiWorkflow, select } from '../src/uiWorkflow';
 
+// Matches LONG_TEXT in the fixture app.
+const longText = `Station notes: ${'platform changes are announced on the departure boards. '.repeat(
+  8,
+)}`;
+
 function checkFixture() {
   return runUiWorkflow('io.github.tyanochkuby.uifixture', async ui => {
     const field = () =>
@@ -31,6 +36,12 @@ function checkFixture() {
         element => element.label === 'Destination: Central Station',
       ),
     );
+    const notes = await ui.waitFor(snapshot =>
+      select(snapshot, element => element.label.startsWith('Station notes:')),
+    );
+    if (notes.snapshot.elements[notes.index].label !== longText) {
+      throw new Error('Long text was not observed whole.');
+    }
 
     await actOn(
       () =>

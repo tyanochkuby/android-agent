@@ -1,5 +1,5 @@
 import { contextBudget, runAgent } from './agent';
-import type { AgentTools, Model } from './agent';
+import type { AgentTools, Model, Screen } from './agent';
 import { chatgpt } from './chatgpt';
 import { companion } from './companion';
 import { conversation } from './conversation';
@@ -106,7 +106,7 @@ async function save(id: string, outcome: Outcome) {
 // turn is never retried. `tools` receives the turn ID. Call inside `exclusive`.
 export async function ask(
   message: string,
-  shareScreen: boolean,
+  screen: Screen,
   tools: (turn: string) => AgentTools,
 ) {
   compactor.report(undefined);
@@ -148,7 +148,7 @@ export async function ask(
         message,
         model,
         tools(id),
-        shareScreen,
+        screen,
         shareHistory
           ? await conversation.context(model, budget)
           : await conversation.since(

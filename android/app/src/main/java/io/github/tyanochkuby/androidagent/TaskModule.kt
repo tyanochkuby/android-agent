@@ -1,16 +1,21 @@
 package io.github.tyanochkuby.androidagent
 
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import androidx.annotation.RequiresApi
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import io.github.tyanochkuby.androidagent.assistant.SpeechModel
 import io.github.tyanochkuby.androidagent.assistant.VoiceTurns
+import io.github.tyanochkuby.androidagent.tasks.CapturedScreen
 import io.github.tyanochkuby.androidagent.tasks.Phase
+import io.github.tyanochkuby.androidagent.tasks.ScreenConsent
+import io.github.tyanochkuby.androidagent.tasks.ScreenGrants
 import io.github.tyanochkuby.androidagent.tasks.UiSession
 import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import io.github.tyanochkuby.androidagent.tasks.TaskRequest
@@ -28,6 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -37,6 +43,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   private val executor = application.taskExecutor
   private val conversation = application.conversation
   private val chatgpt = application.chatgpt
+  private val screenshots = application.screenshots
 
   // Turns run in JavaScript, so a turn still running when this runtime starts was interrupted.
   private val recoveryLock = Mutex()
@@ -156,6 +163,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   }
 
   override fun chatgptSignOut(promise: Promise) = respond(promise) {
+    withContext(Dispatchers.IO) { screenshots.clear() }
     chatgpt.signOut().toString()
   }
 
@@ -169,6 +177,52 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
       put("text", reply.text)
       put("inputTokens", reply.inputTokens)
     }.toString()
+  }
+
+  override fun screenSharing(promise: Promise) = respond(promise) {
+    ScreenConsent.enabled(context).toString()
+  }
+
+  /** Turning sharing off ends any open UI session and deletes every kept screenshot. */
+  override fun setScreenSharing(enabled: Boolean, promise: Promise) = respond(promise) {
+    ScreenConsent.set(context, enabled)
+    if (!enabled) {
+      closeUi()
+      withContext(Dispatchers.IO) { screenshots.clear() }
+    }
+    null
+  }
+
+  /**
+   * Captures the open UI session's window for the connected account and keeps it. Resolves null when the window is not
+   * ready yet; call again.
+   */
+  override fun captureUi(promise: Promise) = respond(promise) {
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+    check(Build.VERSION.SDK_INT >= 34) { "Screenshots need Android 14 or later." }
+    val session = checkNotNull(uiSession) { "Open an app first." }
+    val owner = owner()
+    // React Native timers can pause when the target app opens.
+    delay(250)
+    val capture = session.capture() ?: return@respond null
+    check(uiSession === session && ScreenConsent.enabled(context)) { "Screen sharing ended during the capture." }
+    val screenshot = withContext(Dispatchers.IO) { screenshots.save(owner, capture.app, capture.jpeg) }
+    taskJson.encodeToString(CapturedScreen(screenshot, capture.snapshot))
+  }
+
+  /** The connected account's kept screenshots, newest first. */
+  override fun listScreenshots(promise: Promise) = respond(promise) {
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+    val owner = owner()
+    taskJson.encodeToString(withContext(Dispatchers.IO) { screenshots.list(owner) })
+  }
+
+  // Screenshots belong to the saved connection, matching the conversation history owner.
+  private fun owner(): String {
+    val session = preferences.getString(SETTINGS, null)
+      ?.let { taskJson.parseToJsonElement(it).jsonObject["session"]?.jsonObject }
+    val id = checkNotNull(session?.get("id")?.jsonPrimitive?.contentOrNull) { "Sign in with ChatGPT in Android Agent." }
+    return "${if (session["chatgpt"]?.jsonPrimitive?.booleanOrNull == true) "chatgpt" else "companion"}:$id"
   }
 
   private fun canShareHistory(account: String): Boolean {
@@ -214,9 +268,13 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
 
   private var uiSession: UiSession? = null
 
-  override fun startUi(app: String, promise: Promise) = respond(promise) {
+  override fun startUi(app: String, grant: String?, promise: Promise) = respond(promise) {
     check(uiSession == null) { "Close the current UI session first." }
     val observer = checkNotNull(WindowObserver.connected) { "Enable Android Agent in Accessibility settings." }
+    if (grant != null) {
+      return@respond if (Build.VERSION.SDK_INT >= 36) startGrantedUi(app, grant, observer)
+      else error("Screen sharing for voice requests needs Android 16.")
+    }
     val foreground = checkNotNull(MainActivity.foregroundSession) { "Open Android Agent first." }
     require(app.matches(PACKAGE_NAME) && app != foreground.activity.packageName) { "Choose a valid external app." }
     val session = UiSession(observer, app)
@@ -239,6 +297,36 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
       if (uiSession === session) closeUi()
       throw error
     }
+  }
+
+  /**
+   * Starts a session for a voice request whose screen sharing the user allowed. An app already in front, such as the
+   * one the user asked from, is read where it is. Any other app is launched from the Accessibility service, which
+   * Android lets start activities from the background.
+   */
+  @RequiresApi(36)
+  private suspend fun startGrantedUi(app: String, id: String, observer: WindowObserver): String? {
+    require(app.matches(PACKAGE_NAME) && app != context.packageName) { "Choose a valid external app." }
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+    val grant = checkNotNull(ScreenGrants.active(id)) { "Screen sharing for this request ended." }
+    check(executor.read(null)?.finished != false) { "Finish the current task first." }
+    val session = UiSession(observer, app, grant.expiresAt)
+    uiSession = session
+    try {
+      if (observer.activePackage() != app) {
+        val options = ActivityOptions.makeBasic()
+          .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS)
+        observer.startIntentSender(
+          observer.packageManager.getLaunchIntentSenderForPackage(app), null,
+          Intent.FLAG_ACTIVITY_NEW_TASK, Intent.FLAG_ACTIVITY_NEW_TASK, 0, options.toBundle(),
+        )
+      }
+      observer.session = session
+    } catch (error: Exception) {
+      if (uiSession === session) closeUi()
+      throw error
+    }
+    return null
   }
 
   override fun observeUi(promise: Promise) = respond(promise) {

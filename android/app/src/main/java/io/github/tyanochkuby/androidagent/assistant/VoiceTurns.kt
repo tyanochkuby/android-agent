@@ -9,6 +9,7 @@ import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
 import com.facebook.react.jstasks.HeadlessJsTaskContext
+import io.github.tyanochkuby.androidagent.tasks.ScreenGrants
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -23,20 +24,30 @@ internal object VoiceTurns {
   private data class Pending(
     val result: (String, Boolean) -> Unit,
     val timeout: Runnable,
+    val screen: ScreenGrants.Grant?,
     var runtime: ReactContext? = null,
   )
   private val pending = mutableMapOf<String, Pending>()
 
-  /** Starts one turn. [onResult] receives the reply, or the failure text with `failed = true`. */
-  fun start(context: Context, transcript: String, onResult: (text: String, failed: Boolean) -> Unit) {
+  /**
+   * Starts one turn. [screen] is the screen sharing the user allowed for it, revoked when the turn ends.
+   * [onResult] receives the reply, or the failure text with `failed = true`.
+   */
+  fun start(context: Context, transcript: String, screen: ScreenGrants.Grant?, onResult: (text: String, failed: Boolean) -> Unit) {
     UiThreadUtil.assertOnUiThread()
     val id = UUID.randomUUID().toString()
     val timeout = Runnable { finish(id, "Android Agent did not return a reply in time.", true) }
-    pending[id] = Pending(onResult, timeout)
-    main.postDelayed(timeout, 180_000)
+    pending[id] = Pending(onResult, timeout, screen)
+    main.postDelayed(timeout, ScreenGrants.LIFETIME_MS)
     val data = Arguments.createMap().apply {
       putString("id", id)
       putString("transcript", transcript)
+      screen?.let {
+        putMap("screen", Arguments.createMap().apply {
+          putString("grant", it.id)
+          putString("source", it.source)
+        })
+      }
     }
     // Allowed in the foreground because Android Agent's own screen may be open; the JS side reports it busy.
     val task = HeadlessJsTaskConfig("VoiceTurn", data, isAllowedInForeground = true)
@@ -75,6 +86,7 @@ internal object VoiceTurns {
   fun finish(id: String, text: String, failed: Boolean) {
     val turn = pending.remove(id) ?: return
     main.removeCallbacks(turn.timeout)
+    turn.screen?.let { ScreenGrants.revoke(it.id) }
     turn.result(text, failed)
   }
 }

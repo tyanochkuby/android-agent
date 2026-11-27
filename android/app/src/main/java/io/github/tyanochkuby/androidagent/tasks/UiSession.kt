@@ -1,13 +1,22 @@
 package io.github.tyanochkuby.androidagent.tasks
 
+import android.accessibilityservice.AccessibilityService
 import android.app.KeyguardManager
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.annotation.RequiresApi
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.UUID
+import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -24,13 +33,16 @@ internal data class UiElement(
 @Serializable
 internal data class UiSnapshot(val id: String, val windowId: Int, val elements: List<UiElement>)
 
+/** A screenshot of [app]'s window, JPEG encoded, with the snapshot read from the same window. */
+internal class UiCapture(val app: String, val snapshot: UiSnapshot, val jpeg: ByteArray)
+
 internal class UiSession(
   private val observer: WindowObserver,
   private val targetPackage: String,
+  private val expiresAt: Long = SystemClock.elapsedRealtime() + 60_000,
 ) {
   private val launchDeadline = SystemClock.elapsedRealtime() + 10_000
-  private val expiresAt = SystemClock.elapsedRealtime() + 60_000
-  private data class SelectionSnapshot(val ui: UiSnapshot, val identities: List<String>)
+  private data class SelectionSnapshot(val ui: UiSnapshot, val identities: List<String>, val limits: List<Int>)
 
   private var snapshot: SelectionSnapshot? = null
   private var windowId: Int? = null
@@ -44,9 +56,74 @@ internal class UiSession(
   fun observe(): UiSnapshot? = withRoot { root ->
     val elements = mutableListOf<UiElement>()
     val identities = mutableListOf<String>()
-    collect(root, emptyList(), elements, identities, intArrayOf(0))
+    val limits = mutableListOf<Int>()
+    collect(root, emptyList(), Collected(elements, identities, limits), intArrayOf(0))
     UiSnapshot(UUID.randomUUID().toString(), root.windowId, elements).also {
-      snapshot = SelectionSnapshot(it, identities)
+      snapshot = SelectionSnapshot(it, identities, limits)
+    }
+  }
+
+  /**
+   * Reads the target window and takes a screenshot of that window only, so overlays and other apps stay out of it.
+   * Returns null when the window is not ready or changed while it was captured; nothing is kept then. Android refuses
+   * secure windows, such as password or banking screens.
+   */
+  @RequiresApi(34)
+  suspend fun capture(): UiCapture? {
+    val ui = observe() ?: return null
+    var result = screenshot(ui.windowId)
+    if (result == AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
+      delay(SCREENSHOT_INTERVAL_MS)
+      result = screenshot(ui.windowId)
+    }
+    val shot = when (result) {
+      is AccessibilityService.ScreenshotResult -> result
+      AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> error("This app does not allow screenshots of this screen.")
+      AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_WINDOW -> return null
+      else -> error("Android could not take the screenshot.")
+    }
+    try {
+      // Discard a capture whose window changed or was acted on meanwhile, so the image matches the snapshot.
+      if (snapshot?.ui !== ui || withRoot { it.windowId == ui.windowId } != true) return null
+      val jpeg = withContext(Dispatchers.Default) { encode(shot) }
+      return UiCapture(targetPackage, ui, jpeg)
+    } finally {
+      shot.hardwareBuffer.close()
+    }
+  }
+
+  @RequiresApi(34)
+  private suspend fun screenshot(windowId: Int): Any = suspendCancellableCoroutine { continuation ->
+    observer.takeScreenshotOfWindow(
+      windowId, observer.mainExecutor,
+      object : AccessibilityService.TakeScreenshotCallback {
+        override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+          if (continuation.isActive) continuation.resume(result) else result.hardwareBuffer.close()
+        }
+
+        override fun onFailure(errorCode: Int) {
+          continuation.resume(errorCode)
+        }
+      },
+    )
+  }
+
+  @RequiresApi(34)
+  private fun encode(shot: AccessibilityService.ScreenshotResult): ByteArray {
+    val hardware = checkNotNull(Bitmap.wrapHardwareBuffer(shot.hardwareBuffer, shot.colorSpace)) {
+      "Android could not read the screenshot."
+    }
+    val software = hardware.copy(Bitmap.Config.ARGB_8888, false)
+    hardware.recycle()
+    val scale = minOf(1f, MAX_IMAGE_SIDE.toFloat() / maxOf(software.width, software.height))
+    val scaled = if (scale < 1f) {
+      Bitmap.createScaledBitmap(software, (software.width * scale).toInt(), (software.height * scale).toInt(), true)
+        .also { software.recycle() }
+    } else software
+    return ByteArrayOutputStream().use { out ->
+      scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
+      scaled.recycle()
+      out.toByteArray()
     }
   }
 
@@ -62,11 +139,11 @@ internal class UiSession(
     val accepted = withRoot { root ->
       if (root.windowId != previous.ui.windowId ||
         atPath(root, witness.path, 0) {
-          describe(it, witness.path) == witness && identity(it) == previous.identities[witnessIndex]
+          describe(it, witness.path, previous.limits[witnessIndex]) == witness && identity(it) == previous.identities[witnessIndex]
         } != true
       ) return@withRoot null
       atPath(root, expected.path, 0) { node ->
-        if (describe(node, expected.path) != expected || identity(node) != previous.identities[elementIndex]) {
+        if (describe(node, expected.path, previous.limits[elementIndex]) != expected || identity(node) != previous.identities[elementIndex]) {
           return@atPath null
         }
         if (text == null) {
@@ -116,29 +193,37 @@ internal class UiSession(
     }
   }
 
-  private fun collect(node: AccessibilityNodeInfo, path: List<Int>, elements: MutableList<UiElement>, identities: MutableList<String>, visited: IntArray) {
+  private class Collected(val elements: MutableList<UiElement>, val identities: MutableList<String>, val limits: MutableList<Int>) {
+    var textLeft = TEXT_BUDGET
+  }
+
+  private fun collect(node: AccessibilityNodeInfo, path: List<Int>, into: Collected, visited: IntArray) {
     if (visited[0]++ >= 400 || path.size > 20) return
     if (node.packageName?.toString() != targetPackage) return
-    describe(node, path)?.let {
-      elements.add(it)
-      identities.add(identity(node))
+    // Long text, such as an expanded description, stays whole until the snapshot's text budget runs out.
+    val limit = into.textLeft.coerceIn(SHORT_TEXT, LONG_TEXT)
+    describe(node, path, limit)?.let {
+      into.elements.add(it)
+      into.identities.add(identity(node))
+      into.limits.add(limit)
+      into.textLeft -= it.label.length + (it.description?.length ?: 0)
     }
     for (index in 0 until node.childCount) {
       if (visited[0] >= 400) break
-      childAt(node, index)?.let { child -> useNode(child) { collect(child, path + index, elements, identities, visited) } }
+      childAt(node, index)?.let { child -> useNode(child) { collect(child, path + index, into, visited) } }
     }
   }
 
-  private fun describe(node: AccessibilityNodeInfo, path: List<Int>): UiElement? {
+  private fun describe(node: AccessibilityNodeInfo, path: List<Int>, limit: Int): UiElement? {
     if (!node.isVisibleToUser || node.isPassword ||
       (Build.VERSION.SDK_INT >= 34 && node.isAccessibilityDataSensitive)
     ) return null
-    val label = (node.text ?: node.contentDescription)?.toString().orEmpty().take(200)
+    val label = (node.text ?: node.contentDescription)?.toString().orEmpty().take(limit)
     val actions = node.actionList.map { it.id }
     val editable = node.isEnabled && AccessibilityNodeInfo.ACTION_SET_TEXT in actions
     val clickable = node.isEnabled && AccessibilityNodeInfo.ACTION_CLICK in actions
     if (label.isBlank() && !editable && !clickable) return null
-    return UiElement(path, label, node.contentDescription?.toString()?.take(200), node.viewIdResourceName, node.className?.toString(), editable, clickable)
+    return UiElement(path, label, node.contentDescription?.toString()?.take(limit), node.viewIdResourceName, node.className?.toString(), editable, clickable)
   }
 
   private fun identity(node: AccessibilityNodeInfo): String {
@@ -165,6 +250,15 @@ internal class UiSession(
     if (depth == path.size) return block(root)
     val child = childAt(root, path[depth]) ?: return null
     return useNode(child) { atPath(child, path, depth + 1, block) }
+  }
+
+  private companion object {
+    // Long enough for legible text while keeping image input small.
+    const val MAX_IMAGE_SIDE = 1_568
+    const val SCREENSHOT_INTERVAL_MS = 500L
+    const val SHORT_TEXT = 200
+    const val LONG_TEXT = 4_000
+    const val TEXT_BUDGET = 16_000
   }
 }
 

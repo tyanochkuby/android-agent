@@ -36,6 +36,10 @@ jest.mock('../src/native/NativeTasks', () => ({
     saveSettings: jest.fn(),
     finishVoiceTurn: jest.fn(),
     speechModelStatus: jest.fn(async () => null),
+    screenSharing: jest.fn(async () => 'false'),
+    setScreenSharing: jest.fn(async () => {}),
+    captureUi: jest.fn(),
+    listScreenshots: jest.fn(),
     chatgptStatus: jest.fn(async () => null),
     chatgptSignIn: jest.fn(),
     chatgptCancelSignIn: jest.fn(),
@@ -280,24 +284,23 @@ test('starts companion sign-in and runs a prompt once plan usage is enabled', as
       screen.getByLabelText('Agent prompt'),
       'What can you do?',
     );
+    const sharing = screen.getByRole('switch', {
+      name: 'Share screen with the agent',
+    });
+    expect(sharing.props.accessibilityState.checked).toBe(false);
+    await fireEvent.press(sharing);
+    expect(NativeTasks.setScreenSharing).toHaveBeenCalledWith(true);
     expect(
-      screen.getByRole('checkbox', { name: 'Share screen for this prompt' })
-        .props.accessibilityState.checked,
-    ).toBe(false);
-    await fireEvent.press(
-      screen.getByRole('checkbox', { name: 'Share screen for this prompt' }),
-    );
+      screen.getByRole('switch', { name: 'Share screen with the agent' }).props
+        .accessibilityState.checked,
+    ).toBe(true);
+    expect(screen.getByText(/screenshots to the connected model/)).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Run prompt' }));
-    expect(
-      screen.getByRole('checkbox', { name: 'Share screen for this prompt' })
-        .props.accessibilityState.checked,
-    ).toBe(false);
     expect(screen.getByText('Ready for Android tasks.')).toBeTruthy();
     expect(signIn).toHaveBeenCalledTimes(1);
     expect(check).toHaveBeenCalledTimes(1);
-    expect(model).toHaveBeenCalledWith(expect.any(String), [
+    expect(model).toHaveBeenCalledWith(expect.stringContaining('get_screen'), [
       { role: 'user', content: 'What can you do?' },
-      { role: 'user', content: expect.stringContaining('observe_ui') },
     ]);
   } finally {
     bridge.mockRestore();
