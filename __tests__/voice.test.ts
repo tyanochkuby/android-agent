@@ -23,7 +23,7 @@ jest.mock('../src/native/NativeTasks', () => ({
     chatgptRespond: jest.fn(),
     submit: jest.fn(),
     startUi: jest.fn(),
-    screenSharing: jest.fn(async () => 'true'),
+    screenAccessActive: jest.fn(async () => 'true'),
     observeUi: jest.fn(),
     stopUi: jest.fn(),
   },

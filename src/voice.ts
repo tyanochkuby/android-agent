@@ -44,7 +44,7 @@ export async function voiceTurn({
   try {
     const run = exclusive(() =>
       screen
-        ? ask(transcript.trim(), { source: screen.source }, turn => ({
+        ? ask(transcript.trim(), screen, turn => ({
             ...agentTools(turn, screen.grant),
             startTimer: refuse,
           }))

@@ -170,7 +170,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   override fun chatgptRespond(
     account: String, instructions: String, input: String, shareHistory: Boolean, promise: Promise,
   ) = respond(promise) {
-    val reply = chatgpt.respond(account, instructions, input, { ScreenConsent.enabled(context) }) {
+    val reply = chatgpt.respond(account, instructions, input, { screenAccessActive(it) }) {
       !shareHistory || canShareHistory(account)
     }
     buildJsonObject {
@@ -181,6 +181,13 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
 
   override fun screenSharing(promise: Promise) = respond(promise) {
     ScreenConsent.enabled(context).toString()
+  }
+
+  private fun screenAccessActive(grant: String?) =
+    ScreenConsent.enabled(context) && (grant == null || ScreenGrants.active(grant) != null)
+
+  override fun screenAccessActive(grant: String?, promise: Promise) = respond(promise) {
+    screenAccessActive(grant).toString()
   }
 
   /** Turning sharing off ends any open UI session and deletes every kept screenshot. */
@@ -206,10 +213,10 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     // React Native timers can pause when the target app opens.
     delay(250)
     val capture = session.capture() ?: return@respond null
-    check(uiSession === session && ScreenConsent.enabled(context)) { "Screen sharing ended during the capture." }
+    check(uiSession === session && session.hasAccess()) { "Screen sharing ended during the capture." }
     val screenshot = withContext(Dispatchers.IO) {
       synchronized(screenshots) {
-        check(ScreenConsent.enabled(context) && owner() == owner) { "Screen sharing ended during the capture." }
+        check(session.hasAccess() && owner() == owner) { "Screen sharing ended during the capture." }
         screenshots.save(owner, capture.app, capture.jpeg)
       }
     }
@@ -217,10 +224,12 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   }
 
   /** The connected account's kept screenshots, newest first. */
-  override fun listScreenshots(promise: Promise) = respond(promise) {
-    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+  override fun listScreenshots(grant: String?, promise: Promise) = respond(promise) {
+    check(screenAccessActive(grant)) { "Screen access for this request ended." }
     val owner = owner()
-    taskJson.encodeToString(withContext(Dispatchers.IO) { screenshots.list(owner) })
+    val saved = withContext(Dispatchers.IO) { screenshots.list(owner) }
+    check(screenAccessActive(grant)) { "Screen access for this request ended." }
+    taskJson.encodeToString(saved)
   }
 
   // Screenshots belong to the saved connection, matching the conversation history owner.
@@ -284,7 +293,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     }
     val foreground = checkNotNull(MainActivity.foregroundSession) { "Open Android Agent first." }
     require(app.matches(PACKAGE_NAME) && app != foreground.activity.packageName) { "Choose a valid external app." }
-    val session = UiSession(observer, app)
+    val session = UiSession(observer, app) { screenAccessActive(null) }
     uiSession = session
     try {
       check(executor.read(null)?.finished != false) { "Finish the current task first." }
@@ -319,11 +328,11 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     check(executor.read(null)?.finished != false) { "Finish the current task first." }
     val grant = checkNotNull(ScreenGrants.active(id)) { "Screen sharing for this request ended." }
     check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
-    if (attachOnly) check(observer.activePackage() == app) { "The source app is no longer in front." }
-    val session = UiSession(observer, app, grant.expiresAt)
+    if (attachOnly) check(grant.source == app && observer.activePackage() == app) { "The source app is no longer in front." }
+    val session = UiSession(observer, app, grant.expiresAt) { screenAccessActive(id) }
     uiSession = session
     try {
-      if (observer.activePackage() != app) {
+      if (!attachOnly && observer.activePackage() != app) {
         val options = ActivityOptions.makeBasic()
           .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS)
         observer.startIntentSender(

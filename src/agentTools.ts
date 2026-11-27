@@ -22,7 +22,7 @@ export const agentTools = (
   openApp: (app, attachOnly = false) =>
     NativeTasks.startUi(app, grant, attachOnly),
   screenStillAllowed: async () =>
-    (await NativeTasks.screenSharing()) === 'true',
+    (await NativeTasks.screenAccessActive(grant)) === 'true',
   async observeUi() {
     const deadline = Date.now() + 5_000;
     let raw: string | null;
@@ -40,7 +40,7 @@ export const agentTools = (
     return raw === null ? null : JSON.parse(raw);
   },
   async listScreenshots() {
-    return JSON.parse(await NativeTasks.listScreenshots()) as Screenshot[];
+    return JSON.parse(await NativeTasks.listScreenshots(grant)) as Screenshot[];
   },
   actUi: (snapshot, index, witness, text) =>
     NativeTasks.actUi(snapshot, index, witness, text),

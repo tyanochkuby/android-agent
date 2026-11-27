@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -90,14 +91,14 @@ class ChatGPT(
    * Returns null input tokens when the reply did not report usage.
    */
   suspend fun respond(
-    subject: String, instructions: String, input: String, canSendScreen: () -> Boolean, canSendHistory: () -> Boolean,
+    subject: String, instructions: String, input: String, canSendScreen: (String?) -> Boolean, canSendHistory: () -> Boolean,
   ): Reply = authorized { account, token ->
     if (account.subject != subject) {
       throw ChatGPTException("account_changed", "The ChatGPT account changed. Continue with ChatGPT again.")
     }
     val model = account.model ?: throw ChatGPTException("not_connected", "Continue with ChatGPT in Android Agent.")
     val messages = Json.parseToJsonElement(input) as JsonArray
-    val containsScreen = messages.any {
+    val screenMessages = messages.filter {
       it.jsonObject["screenData"]?.jsonPrimitive?.booleanOrNull == true || it.jsonObject["screenshot"] != null
     }
     val body = responsesBody(model, instructions, messages) {
@@ -107,7 +108,7 @@ class ChatGPT(
       if (!canSendHistory()) {
         throw ChatGPTException("history_sharing_off", "Sharing earlier conversation is off.")
       }
-      if (containsScreen && !canSendScreen()) {
+      if (screenMessages.any { !canSendScreen(it.jsonObject["screenGrant"]?.jsonPrimitive?.contentOrNull) }) {
         throw ChatGPTException("screen_sharing_off", "Screen sharing was turned off.")
       }
       request("$RESOURCE/responses", token, body) { readResponseStream(it.inputStream.bufferedReader()) }

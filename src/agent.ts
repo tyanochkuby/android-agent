@@ -7,6 +7,7 @@ export type Message = {
   content: string;
   screenshot?: string;
   screenData?: boolean;
+  screenGrant?: string;
 };
 // `images` is true when the adapter sends screenshots as image input.
 export type Model = ((
@@ -127,7 +128,7 @@ open_app switches to another app and ends access to the previous one. The latest
 
 // Whether screen sharing is on for a request. A source is the app the user asked from; the session starts there and
 // can switch apps.
-export type Screen = boolean | { source: string };
+export type Screen = boolean | { source: string; grant?: string };
 
 // Matches the native setting's message.
 const sharingOff =
@@ -271,12 +272,20 @@ export async function runAgent(
 ): Promise<string> {
   const shareScreen = screen !== false;
   const source = typeof screen === 'object' ? screen.source : undefined;
+  const grant = typeof screen === 'object' ? screen.grant : undefined;
   // The source note follows the prompt, so earlier messages stay a reusable prefix.
   const input: Message[] = [
     ...history,
     { role: 'user', content: prompt },
     ...(source
-      ? [{ role: 'user' as const, content: sourceTools(source) }]
+      ? [
+          {
+            role: 'user' as const,
+            content: sourceTools(source),
+            screenData: true,
+            screenGrant: grant,
+          },
+        ]
       : []),
   ];
   // The app of the open UI session.
@@ -505,7 +514,10 @@ export async function runAgent(
             result: await execute(decision, entry),
           };
           results.push(result);
-          if (decision.tool !== 'start_timer') entry.message.screenData = true;
+          if (decision.tool !== 'start_timer') {
+            entry.message.screenData = true;
+            entry.message.screenGrant = grant;
+          }
           if (
             (decision.tool === 'observe_ui' ||
               decision.tool === 'get_screen') &&

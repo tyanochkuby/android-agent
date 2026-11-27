@@ -40,6 +40,7 @@ internal class UiSession(
   private val observer: WindowObserver,
   private val targetPackage: String,
   private val expiresAt: Long = SystemClock.elapsedRealtime() + 60_000,
+  private val authorized: () -> Boolean = { true },
 ) {
   private val launchDeadline = SystemClock.elapsedRealtime() + 10_000
   private data class SelectionSnapshot(val ui: UiSnapshot, val identities: List<String>, val limits: List<Int>)
@@ -47,6 +48,8 @@ internal class UiSession(
   private var snapshot: SelectionSnapshot? = null
   private var windowId: Int? = null
   private var stopped = false
+
+  fun hasAccess() = authorized() && SystemClock.elapsedRealtime() < expiresAt
 
   fun stop() {
     stopped = true
@@ -70,10 +73,13 @@ internal class UiSession(
    */
   @RequiresApi(34)
   suspend fun capture(): UiCapture? {
-    val ui = observe() ?: return null
+    var ui = observe() ?: return null
+    var selection = snapshot ?: return null
     var result = screenshot(ui.windowId)
     if (result == AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) {
       delay(SCREENSHOT_INTERVAL_MS)
+      ui = observe() ?: return null
+      selection = snapshot ?: return null
       result = screenshot(ui.windowId)
     }
     val shot = when (result) {
@@ -84,9 +90,9 @@ internal class UiSession(
     }
     try {
       // Discard a capture whose window changed or was acted on meanwhile, so the image matches the snapshot.
-      if (snapshot?.ui !== ui) return null
+      if (snapshot !== selection) return null
       val after = observe() ?: return null
-      if (after.windowId != ui.windowId || after.elements != ui.elements) return null
+      if (after.windowId != ui.windowId || after.elements != ui.elements || snapshot?.identities != selection.identities) return null
       val jpeg = withContext(Dispatchers.Default) { encode(shot) }
       return UiCapture(targetPackage, after, jpeg)
     } finally {
@@ -172,7 +178,7 @@ internal class UiSession(
 
   private fun <T> withRoot(block: (AccessibilityNodeInfo) -> T): T? {
     val now = SystemClock.elapsedRealtime()
-    if (now >= expiresAt || observer.getSystemService(KeyguardManager::class.java).isKeyguardLocked ||
+    if (!hasAccess() || observer.getSystemService(KeyguardManager::class.java).isKeyguardLocked ||
       !observer.getSystemService(PowerManager::class.java).isInteractive
     ) stop()
     check(!stopped) { "The UI session ended. Return to Android Agent to start again." }

@@ -29,7 +29,7 @@ internal object ScreenConsent {
 internal object ScreenGrants {
   data class Grant(val id: String, val source: String, val expiresAt: Long)
 
-  private val grants = mutableMapOf<String, Grant>()
+  private val grants = java.util.concurrent.ConcurrentHashMap<String, Grant>()
 
   fun grant(source: String) = Grant(UUID.randomUUID().toString(), source, SystemClock.elapsedRealtime() + LIFETIME_MS)
     .also { grants[it.id] = it }
