@@ -1,4 +1,4 @@
-import { contextBudget, runAgent } from './agent';
+import { contextBudget, runAgent, ScreenAccessEnded } from './agent';
 import type { AgentTools, Model, Screen } from './agent';
 import { chatgpt } from './chatgpt';
 import { companion } from './companion';
@@ -79,7 +79,8 @@ export function connectedModel(
   live?: AbortSignal,
   shareHistory = false,
 ): Model {
-  if (session.chatgpt) return chatgpt.model(session.id, onUsage, live, shareHistory);
+  if (session.chatgpt)
+    return chatgpt.model(session.id, onUsage, live, shareHistory);
   const bridge = companion(pairingCode.trim(), session.id, onUsage);
   return live ? bridge.liveModel(live) : bridge.model;
 }
@@ -162,7 +163,17 @@ export async function ask(
   } catch (error) {
     compactor.report(undefined);
     // Like a failed typed prompt, any failure ends the connection and its history consent.
-    if (config.session) await settings.disconnect().catch(() => {});
+    if (
+      config.session &&
+      !(error instanceof ScreenAccessEnded) &&
+      !(
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'screen_sharing_off'
+      )
+    ) {
+      await settings.disconnect().catch(() => {});
+    }
     outcome = {
       failure:
         (error instanceof Error && error.message.trim()) ||

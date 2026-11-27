@@ -131,6 +131,8 @@ open_app switches to another app and ends access to the previous one. The latest
 export type Screen = boolean | { source: string; grant?: string };
 
 // Matches the native setting's message.
+export class ScreenAccessEnded extends Error {}
+
 const sharingOff =
   'Screen sharing is off. Turn on Share screen with the agent in Android Agent first.';
 const screenshotId = /^s-\d{8}-\d{6}-[a-z0-9]{6}$/;
@@ -468,7 +470,7 @@ export async function runAgent(
         tools.screenStillAllowed &&
         !(await tools.screenStillAllowed())
       ) {
-        throw new Error(sharingOff);
+        throw new ScreenAccessEnded('Screen access for this request ended.');
       }
       const raw = await model(
         instructions,

@@ -108,10 +108,15 @@ class ChatGPT(
       if (!canSendHistory()) {
         throw ChatGPTException("history_sharing_off", "Sharing earlier conversation is off.")
       }
-      if (screenMessages.any { !canSendScreen(it.jsonObject["screenGrant"]?.jsonPrimitive?.contentOrNull) }) {
-        throw ChatGPTException("screen_sharing_off", "Screen sharing was turned off.")
+      val checkScreenAccess = {
+        if (screenMessages.any { !canSendScreen(it.jsonObject["screenGrant"]?.jsonPrimitive?.contentOrNull) }) {
+          throw ChatGPTException("screen_sharing_off", "Screen access for this request ended.")
+        }
       }
-      request("$RESOURCE/responses", token, body) { readResponseStream(it.inputStream.bufferedReader()) }
+      checkScreenAccess()
+      request("$RESOURCE/responses", token, body, checkScreenAccess) {
+        readResponseStream(it.inputStream.bufferedReader())
+      }
     }
   }
 
@@ -302,7 +307,7 @@ class ChatGPT(
   }
 
   /** An authorized API call. Throws [Unauthorized] on 401 so the caller can refresh and retry. */
-  private fun <T> request(url: String, token: String, body: String?, read: (HttpURLConnection) -> T): T {
+  private fun <T> request(url: String, token: String, body: String?, beforeWrite: () -> Unit = {}, read: (HttpURLConnection) -> T): T {
     val connection = open(url, if (body == null) "GET" else "POST")
     try {
       connection.setRequestProperty("Authorization", "Bearer $token")
@@ -310,7 +315,7 @@ class ChatGPT(
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("Accept", "text/event-stream")
         connection.readTimeout = 180_000
-        send(connection, body)
+        send(connection, body, beforeWrite)
       }
       val status = connection.responseCode
       if (status == 401) throw Unauthorized()
@@ -350,11 +355,14 @@ class ChatGPT(
     setRequestProperty("Accept", "application/json")
   }
 
-  private fun send(connection: HttpURLConnection, body: String) {
+  private fun send(connection: HttpURLConnection, body: String, beforeWrite: () -> Unit = {}) {
     val bytes = body.toByteArray()
     connection.doOutput = true
     connection.setFixedLengthStreamingMode(bytes.size)
-    connection.outputStream.use { it.write(bytes) }
+    connection.outputStream.use {
+      beforeWrite()
+      it.write(bytes)
+    }
   }
 
   private fun errorBody(connection: HttpURLConnection): JsonElement? = runCatching {

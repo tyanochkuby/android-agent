@@ -15,6 +15,7 @@ import io.github.tyanochkuby.androidagent.assistant.VoiceTurns
 import io.github.tyanochkuby.androidagent.tasks.CapturedScreen
 import io.github.tyanochkuby.androidagent.tasks.Phase
 import io.github.tyanochkuby.androidagent.tasks.ScreenConsent
+import io.github.tyanochkuby.androidagent.chatgpt.ChatGPTException
 import io.github.tyanochkuby.androidagent.tasks.ScreenGrants
 import io.github.tyanochkuby.androidagent.tasks.UiSession
 import io.github.tyanochkuby.androidagent.tasks.WindowObserver
@@ -220,6 +221,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
         screenshots.save(owner, capture.app, capture.jpeg)
       }
     }
+    check(uiSession === session && session.hasAccess()) { "Screen sharing ended during the capture." }
     taskJson.encodeToString(CapturedScreen(screenshot, capture.snapshot))
   }
 
@@ -389,7 +391,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
       } catch (error: CancellationException) {
         throw error
       } catch (error: Exception) {
-        promise.reject("E_TASK", error)
+        promise.reject(if (error is ChatGPTException && error.code == "screen_sharing_off") error.code else "E_TASK", error)
       }
     }
   }

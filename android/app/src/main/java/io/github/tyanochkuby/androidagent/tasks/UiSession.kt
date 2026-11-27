@@ -47,9 +47,9 @@ internal class UiSession(
 
   private var snapshot: SelectionSnapshot? = null
   private var windowId: Int? = null
-  private var stopped = false
+  @Volatile private var stopped = false
 
-  fun hasAccess() = authorized() && SystemClock.elapsedRealtime() < expiresAt
+  fun hasAccess() = !stopped && authorized() && SystemClock.elapsedRealtime() < expiresAt
 
   fun stop() {
     stopped = true
