@@ -30,8 +30,10 @@ internal object ScreenGrants {
 
   private val grants = java.util.concurrent.ConcurrentHashMap<String, Grant>()
 
-  fun grant(source: String? = null) = Grant(UUID.randomUUID().toString(), source, SystemClock.elapsedRealtime() + LIFETIME_MS)
-    .also { grants[it.id] = it }
+  fun grant(source: String? = null): Grant {
+    val expiresAt = if (source == null) Long.MAX_VALUE else SystemClock.elapsedRealtime() + LIFETIME_MS
+    return Grant(UUID.randomUUID().toString(), source, expiresAt).also { grants[it.id] = it }
+  }
 
   fun active(id: String) = grants[id]?.takeIf { SystemClock.elapsedRealtime() < it.expiresAt }
 
