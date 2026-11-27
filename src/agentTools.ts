@@ -19,7 +19,10 @@ export const agentTools = (
     );
     return tasks.waitForTimer(id);
   },
-  openApp: app => NativeTasks.startUi(app, grant),
+  openApp: (app, attachOnly = false) =>
+    NativeTasks.startUi(app, grant, attachOnly),
+  screenStillAllowed: async () =>
+    (await NativeTasks.screenSharing()) === 'true',
   async observeUi() {
     const deadline = Date.now() + 5_000;
     let raw: string | null;

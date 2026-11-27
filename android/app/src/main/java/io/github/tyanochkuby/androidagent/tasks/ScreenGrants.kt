@@ -29,16 +29,18 @@ internal object ScreenConsent {
 internal object ScreenGrants {
   data class Grant(val id: String, val source: String, val expiresAt: Long)
 
-  private var current: Grant? = null
+  private val grants = mutableMapOf<String, Grant>()
 
   fun grant(source: String) = Grant(UUID.randomUUID().toString(), source, SystemClock.elapsedRealtime() + LIFETIME_MS)
-    .also { current = it }
+    .also { grants[it.id] = it }
 
-  fun active(id: String) = current?.takeIf { it.id == id && SystemClock.elapsedRealtime() < it.expiresAt }
+  fun active(id: String) = grants[id]?.takeIf { SystemClock.elapsedRealtime() < it.expiresAt }
 
   fun revoke(id: String) {
-    if (current?.id == id) current = null
+    grants.remove(id)
   }
+
+  fun clear() = grants.clear()
 
   /** Matches the voice turn timeout, so a grant never outlives its request. */
   const val LIFETIME_MS = 180_000L

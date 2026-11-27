@@ -23,6 +23,7 @@ jest.mock('../src/native/NativeTasks', () => ({
     chatgptRespond: jest.fn(),
     submit: jest.fn(),
     startUi: jest.fn(),
+    screenSharing: jest.fn(async () => 'true'),
     observeUi: jest.fn(),
     stopUi: jest.fn(),
   },
@@ -201,6 +202,7 @@ test('reads the app the user asked from under the screen grant', async () => {
   expect(NativeTasks.startUi).toHaveBeenCalledWith(
     'com.example.video',
     'grant-1',
+    true,
   );
   expect(JSON.stringify(model.mock.calls[1][1])).toContain('FAV TRACKS');
   expect(NativeTasks.submit).not.toHaveBeenCalled();

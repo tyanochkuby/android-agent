@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
+import NativeTasks from '../src/native/NativeTasks';
 import { openStationDirections } from './mapsWorkflow';
 import { actOn, runUiWorkflow, select } from '../src/uiWorkflow';
 
@@ -8,7 +9,7 @@ const longText = `Station notes: ${'platform changes are announced on the depart
   8,
 )}`;
 
-function checkFixture() {
+async function checkFixture() {
   return runUiWorkflow('io.github.tyanochkuby.uifixture', async ui => {
     const field = () =>
       ui.waitFor(snapshot =>
@@ -71,6 +72,7 @@ export default function IntegrationApp() {
   async function run(work: () => Promise<unknown>) {
     setStatus('Running');
     try {
+      await NativeTasks.setScreenSharing(true);
       await work();
       console.info('ANDROID_AGENT_INTEGRATION_PASSED');
       setStatus('Integration passed');

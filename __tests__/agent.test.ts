@@ -270,7 +270,7 @@ test('reads the source app, switches apps and keeps its latest observation', asy
     'The user asked while com.example.video was in front.',
   );
   expect(tools.openApp.mock.calls).toEqual([
-    ['com.example.video'],
+    ['com.example.video', true],
     ['com.example.music'],
   ]);
   expect(tools.closeUi).toHaveBeenCalledTimes(2);

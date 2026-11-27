@@ -6,6 +6,7 @@ export type Message = {
   role: 'user' | 'assistant';
   content: string;
   screenshot?: string;
+  screenData?: boolean;
 };
 // `images` is true when the adapter sends screenshots as image input.
 export type Model = ((
@@ -239,10 +240,14 @@ function parseDecisions(raw: string): Decision[] | undefined {
 
 export type AgentTools = {
   startTimer: (seconds: number) => Promise<unknown>;
-  openApp: (packageName: string) => Promise<void>;
+  openApp: (packageName: string, attachOnly?: boolean) => Promise<void>;
+  screenStillAllowed?: () => Promise<boolean>;
   observeUi: () => Promise<Snapshot | null>;
   // Takes and keeps a screenshot of the open app with its snapshot, or null when the window is unavailable.
-  captureUi: () => Promise<{ screenshot: Screenshot; snapshot: Snapshot } | null>;
+  captureUi: () => Promise<{
+    screenshot: Screenshot;
+    snapshot: Snapshot;
+  } | null>;
   // The connected account's kept screenshots, newest first.
   listScreenshots: () => Promise<Screenshot[]>;
   actUi: (
@@ -289,17 +294,28 @@ export async function runAgent(
   const latest = new Map<string, { result?: unknown }>();
   // Tool results are serialized before each model call, so an omitted observation shrinks its message.
   // Only the latest image stays in input; the model can read an earlier one again by ID.
-  type ToolMessage = { message: Message; results: unknown[]; screenshot?: string };
+  type ToolMessage = {
+    message: Message;
+    results: unknown[];
+    screenshot?: string;
+  };
   const toolMessages: ToolMessage[] = [];
   let shown: { image: string } | undefined;
 
   // Attaches `result.screenshot` to `entry` in place of any earlier image.
-  function show<T extends { screenshot: Screenshot }>(result: T, entry: ToolMessage) {
+  function show<T extends { screenshot: Screenshot }>(
+    result: T,
+    entry: ToolMessage,
+  ) {
     if (!model.images) {
-      return { ...result, image: 'Images are not supported on this connection.' };
+      return {
+        ...result,
+        image: 'Images are not supported on this connection.',
+      };
     }
     if (shown)
-      shown.image = 'Earlier image omitted. Use read_screenshot to see it again.';
+      shown.image =
+        'Earlier image omitted. Use read_screenshot to see it again.';
     toolMessages.forEach(other => (other.screenshot = undefined));
     entry.screenshot = result.screenshot.id;
     shown = { ...result, image: 'Attached after these results.' };
@@ -312,12 +328,12 @@ export async function runAgent(
 
   // The source app is read only once the model asks to use the screen.
   async function openedApp() {
-    if (!app && source && !opened.size) await openApp(source);
+    if (!app && source && !opened.size) await openApp(source, true);
     if (!app) throw new Error('Open an app first.');
     return app;
   }
 
-  async function openApp(packageName: string) {
+  async function openApp(packageName: string, attachOnly?: boolean) {
     if (!opened.has(packageName) && opened.size >= maxApps)
       throw new Error(
         'This request already opened its maximum number of apps.',
@@ -326,7 +342,8 @@ export async function runAgent(
       await tools.closeUi();
       app = undefined;
     }
-    await tools.openApp(packageName);
+    if (attachOnly) await tools.openApp(packageName, true);
+    else await tools.openApp(packageName);
     app = packageName;
     opened.add(packageName);
   }
@@ -371,7 +388,10 @@ export async function runAgent(
         if (!captured) throw new Error('The app window is unavailable.');
         const elements = describe(captured.snapshot);
         seen.set(current, JSON.stringify(elements));
-        return show({ app: current, screenshot: captured.screenshot, elements }, entry);
+        return show(
+          { app: current, screenshot: captured.screenshot, elements },
+          entry,
+        );
       }
       case 'list_screenshots':
         requireScreen();
@@ -434,6 +454,13 @@ export async function runAgent(
             : 'This request grew past its size limit. Check the device for any actions already taken.',
         );
       }
+      if (
+        input.some(message => message.screenData) &&
+        tools.screenStillAllowed &&
+        !(await tools.screenStillAllowed())
+      ) {
+        throw new Error(sharingOff);
+      }
       const raw = await model(
         instructions,
         input.map(message => ({ ...message })),
@@ -478,8 +505,10 @@ export async function runAgent(
             result: await execute(decision, entry),
           };
           results.push(result);
+          if (decision.tool !== 'start_timer') entry.message.screenData = true;
           if (
-            (decision.tool === 'observe_ui' || decision.tool === 'get_screen') &&
+            (decision.tool === 'observe_ui' ||
+              decision.tool === 'get_screen') &&
             app
           ) {
             const previous = latest.get(app);

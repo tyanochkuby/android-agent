@@ -170,7 +170,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
   override fun chatgptRespond(
     account: String, instructions: String, input: String, shareHistory: Boolean, promise: Promise,
   ) = respond(promise) {
-    val reply = chatgpt.respond(account, instructions, input) {
+    val reply = chatgpt.respond(account, instructions, input, { ScreenConsent.enabled(context) }) {
       !shareHistory || canShareHistory(account)
     }
     buildJsonObject {
@@ -188,6 +188,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     ScreenConsent.set(context, enabled)
     if (!enabled) {
       closeUi()
+      ScreenGrants.clear()
       withContext(Dispatchers.IO) { screenshots.clear() }
     }
     null
@@ -206,7 +207,12 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     delay(250)
     val capture = session.capture() ?: return@respond null
     check(uiSession === session && ScreenConsent.enabled(context)) { "Screen sharing ended during the capture." }
-    val screenshot = withContext(Dispatchers.IO) { screenshots.save(owner, capture.app, capture.jpeg) }
+    val screenshot = withContext(Dispatchers.IO) {
+      synchronized(screenshots) {
+        check(ScreenConsent.enabled(context) && owner() == owner) { "Screen sharing ended during the capture." }
+        screenshots.save(owner, capture.app, capture.jpeg)
+      }
+    }
     taskJson.encodeToString(CapturedScreen(screenshot, capture.snapshot))
   }
 
@@ -268,11 +274,12 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
 
   private var uiSession: UiSession? = null
 
-  override fun startUi(app: String, grant: String?, promise: Promise) = respond(promise) {
+  override fun startUi(app: String, grant: String?, attachOnly: Boolean, promise: Promise) = respond(promise) {
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
     check(uiSession == null) { "Close the current UI session first." }
     val observer = checkNotNull(WindowObserver.connected) { "Enable Android Agent in Accessibility settings." }
     if (grant != null) {
-      return@respond if (Build.VERSION.SDK_INT >= 36) startGrantedUi(app, grant, observer)
+      return@respond if (Build.VERSION.SDK_INT >= 36) startGrantedUi(app, grant, attachOnly, observer)
       else error("Screen sharing for voice requests needs Android 16.")
     }
     val foreground = checkNotNull(MainActivity.foregroundSession) { "Open Android Agent first." }
@@ -284,6 +291,7 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
       check(MainActivity.foregroundSession === foreground && WindowObserver.connected === observer && uiSession === session) {
         "Return to Android Agent and start the workflow again."
       }
+      check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
       val activity = foreground.activity
       if (Build.VERSION.SDK_INT >= 33) {
         activity.startIntentSender(activity.packageManager.getLaunchIntentSenderForPackage(app), null, 0, 0, 0)
@@ -305,11 +313,13 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
    * Android lets start activities from the background.
    */
   @RequiresApi(36)
-  private suspend fun startGrantedUi(app: String, id: String, observer: WindowObserver): String? {
+  private suspend fun startGrantedUi(app: String, id: String, attachOnly: Boolean, observer: WindowObserver): String? {
     require(app.matches(PACKAGE_NAME) && app != context.packageName) { "Choose a valid external app." }
     check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
-    val grant = checkNotNull(ScreenGrants.active(id)) { "Screen sharing for this request ended." }
     check(executor.read(null)?.finished != false) { "Finish the current task first." }
+    val grant = checkNotNull(ScreenGrants.active(id)) { "Screen sharing for this request ended." }
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
+    if (attachOnly) check(observer.activePackage() == app) { "The source app is no longer in front." }
     val session = UiSession(observer, app, grant.expiresAt)
     uiSession = session
     try {
@@ -333,12 +343,14 @@ class TaskModule(private val context: ReactApplicationContext) : NativeTasksSpec
     val session = checkNotNull(uiSession)
     // React Native timers can pause when the target app opens.
     delay(250)
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
     session.observe()?.let { taskJson.encodeToString(it) }
   }
 
   override fun actUi(snapshot: String, element: Double, witness: Double, text: String?, promise: Promise) = respond(promise) {
     require(element in 0.0..399.0 && element % 1 == 0.0)
     require(witness in 0.0..399.0 && witness % 1 == 0.0)
+    check(ScreenConsent.enabled(context)) { ScreenConsent.OFF }
     checkNotNull(uiSession).act(snapshot, element.toInt(), witness.toInt(), text)
   }
 

@@ -19,7 +19,11 @@ export interface Spec extends TurboModule {
   waitForTask(id: string): Promise<string>;
   resume(id: string): Promise<string>;
   cancel(id: string): Promise<string>;
-  startUi(app: string, grant: string | null): Promise<void>;
+  startUi(
+    app: string,
+    grant: string | null,
+    attachOnly: boolean,
+  ): Promise<void>;
   observeUi(): Promise<string | null>;
   actUi(
     snapshot: string,

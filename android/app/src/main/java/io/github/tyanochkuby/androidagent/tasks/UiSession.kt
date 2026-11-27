@@ -84,9 +84,11 @@ internal class UiSession(
     }
     try {
       // Discard a capture whose window changed or was acted on meanwhile, so the image matches the snapshot.
-      if (snapshot?.ui !== ui || withRoot { it.windowId == ui.windowId } != true) return null
+      if (snapshot?.ui !== ui) return null
+      val after = observe() ?: return null
+      if (after.windowId != ui.windowId || after.elements != ui.elements) return null
       val jpeg = withContext(Dispatchers.Default) { encode(shot) }
-      return UiCapture(targetPackage, ui, jpeg)
+      return UiCapture(targetPackage, after, jpeg)
     } finally {
       shot.hardwareBuffer.close()
     }
