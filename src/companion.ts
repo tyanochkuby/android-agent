@@ -56,7 +56,13 @@ export function companion(
       const result = await request<{ text: string; inputTokens?: number }>(
         '/infer',
         'POST',
-        { sessionId, instructions, input, liveOnly },
+        // The companion sends text only.
+        {
+          sessionId,
+          instructions,
+          input: input.map(({ role, content }) => ({ role, content })),
+          liveOnly,
+        },
         signal,
       );
       onUsage?.(result.inputTokens);

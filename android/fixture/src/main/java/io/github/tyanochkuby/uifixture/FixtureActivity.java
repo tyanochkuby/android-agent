@@ -12,6 +12,15 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public class FixtureActivity extends Activity {
+    // Longer than the 200 characters a short label keeps, like an expanded video description.
+    static final String LONG_TEXT;
+
+    static {
+        StringBuilder text = new StringBuilder("Station notes: ");
+        for (int line = 0; line < 8; line++) text.append("platform changes are announced on the departure boards. ");
+        LONG_TEXT = text.toString();
+    }
+
     @Override
     public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -42,6 +51,9 @@ public class FixtureActivity extends Activity {
             details.setText("Destination: Central Station");
             screen.removeAllViews();
             screen.addView(details);
+            TextView notes = new TextView(this);
+            notes.setText(LONG_TEXT);
+            screen.addView(notes);
             Button leave = new Button(this);
             leave.setText("Open Settings");
             leave.setAllCaps(false);

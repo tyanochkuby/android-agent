@@ -22,6 +22,10 @@ jest.mock('../src/native/NativeTasks', () => ({
     chatgptSignOut: jest.fn(),
     chatgptRespond: jest.fn(),
     submit: jest.fn(),
+    startUi: jest.fn(),
+    screenAccessActive: jest.fn(async () => 'true'),
+    observeUi: jest.fn(),
+    stopUi: jest.fn(),
   },
 }));
 
@@ -164,5 +168,48 @@ test('reports busy without starting a turn while another prompt runs', async () 
     'voice-5',
     expect.stringContaining('finishing another prompt'),
     true,
+  );
+});
+
+test('reads the app the user asked from under the screen grant', async () => {
+  jest.mocked(NativeTasks.observeUi).mockResolvedValue(
+    JSON.stringify({
+      id: 'video',
+      elements: [
+        {
+          path: [0],
+          label: 'FAV TRACKS: TOGETHER',
+          description: null,
+          resourceId: null,
+          className: null,
+          clickable: false,
+          editable: false,
+        },
+      ],
+    }),
+  );
+  model
+    .mockResolvedValueOnce('[{"tool":"observe_ui"}]')
+    .mockResolvedValueOnce('[{"tool":"start_timer","seconds":60}]')
+    .mockResolvedValueOnce('[{"tool":"finish","message":"Together."}]');
+
+  await voiceTurn({
+    id: 'voice-7',
+    transcript: 'What is the first favourite track?',
+    screen: { grant: 'grant-1', source: 'com.example.video' },
+  });
+
+  expect(NativeTasks.startUi).toHaveBeenCalledWith(
+    'com.example.video',
+    'grant-1',
+    true,
+  );
+  expect(JSON.stringify(model.mock.calls[1][1])).toContain('FAV TRACKS');
+  expect(NativeTasks.submit).not.toHaveBeenCalled();
+  expect(NativeTasks.stopUi).toHaveBeenCalledTimes(1);
+  expect(NativeTasks.finishVoiceTurn).toHaveBeenCalledWith(
+    'voice-7',
+    'Together.',
+    false,
   );
 });

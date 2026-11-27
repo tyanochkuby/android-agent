@@ -62,11 +62,15 @@ In Android Agent, enter the pairing code the companion printed and tap **Check c
 ### Try it
 
 1. Try `Set a timer for 2 minutes and 17 seconds` and check the countdown in Clock. The app can only confirm that it sent the intent.
-2. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` and tick the screen-sharing box. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
+2. For Maps, enable **Android Agent window verification** in **Accessibility settings** first. Back in Android Agent, enter `In Google Maps, open directions to Warsaw Central Station and stop at the route preview` after turning on **Share screen with the agent**. Keep Maps in the foreground while the agent works, then return to Android Agent for its reply. The UI session expires after one minute.
 
 Each model reply is an ordered list of tool calls, and the results go back to the model for the next step. A prompt gets at most one timer dispatch, because a failed call can leave the dispatch outcome unknown, and one foreground UI session. Clock works without screen sharing.
 
-Screen sharing is off by default and resets for every prompt. Turning it on lets the agent open one installed app, send its visible labels and controls to ChatGPT, and click or type into a control that matches uniquely on the current screen, without asking again. Visible labels can contain personal information. Only the latest screen observation stays in the model context.
+Screen sharing is a persistent setting, off by default. **Share screen with the agent** in the connection panel turns it on for every later typed and spoken prompt, with no further question per prompt, until you turn it off. While it is on, the agent can open installed apps, send their visible labels and controls to the connected model, and click or type into a control that matches uniquely on the current screen. Visible labels can contain personal information. Only the latest observation of each app stays in the model context. With the setting off, the screen tools stay advertised and return a setup error.
+
+On Android 14 and later, `get_screen` also takes a screenshot of the app the agent is working in, but only when the model asks for one during a prompt. Screenshots of secure windows are refused. Taken screenshots stay in app-private storage for later prompts, up to 24, scoped to the signed-in account; `list_screenshots` and `read_screenshot` reach them by ID. Turning the setting off or signing out deletes them. Direct ChatGPT sign-in sends the image to the model. The companion connection is text-only and gets the visible text instead.
+
+On Android 16, the voice assistant can also use the screen. With screen sharing on, a request spoken over another app can read that app and continue in up to three other apps, for example to add tracks from a video description to a playlist. With it off, voice requests stay text-only.
 
 ## Checks
 
@@ -89,7 +93,7 @@ Use a sideloaded debug build on a stock Pixel 9 with Clock and Google Maps insta
 
 1. Send `Set a timer for 1 minute`. Open Clock to confirm the countdown and dismiss the test timer. In Android Agent, the saved step reads `issued`. [Android timer intent reference](https://developer.android.com/reference/android/provider/AlarmClock#ACTION_SET_TIMER)
 2. Tap the Accessibility settings note under the composer, enable **Android Agent window verification**, and return to Android Agent. Android may require allowing restricted settings for the sideloaded app before it can enable the service.
-3. Tick the screen-sharing box and send `Open Google Maps`. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The open step should report **Google Maps window verified**.
+3. Turn on **Share screen with the agent** and send `Open Google Maps`. Once Maps is visible, give the observation a moment to complete, then return to Android Agent. The open step should report **Google Maps window verified**.
 4. Force-stop and reopen Android Agent. The latest task should still be visible. A recorded `issued` or verified action should retain that status without another launch.
 5. Choose Android Agent as the default digital assistant, open another app and invoke the assistant. Ask a short question. The blue working dot should turn into a reply card without bringing Android Agent forward, and the turn should appear in Android Agent's history.
 

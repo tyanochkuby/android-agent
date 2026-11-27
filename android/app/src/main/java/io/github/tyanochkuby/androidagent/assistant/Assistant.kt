@@ -44,6 +44,9 @@ import android.view.WindowManager.LayoutParams
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import io.github.tyanochkuby.androidagent.R
+import io.github.tyanochkuby.androidagent.tasks.ScreenConsent
+import io.github.tyanochkuby.androidagent.tasks.ScreenGrants
+import io.github.tyanochkuby.androidagent.tasks.WindowObserver
 import kotlin.concurrent.thread
 import kotlin.math.roundToInt
 
@@ -249,7 +252,9 @@ class AssistantService : VoiceInteractionService() {
       if (transcript == null) return fail(SpeechRecognizer.ERROR_CLIENT)
       if (transcript.isBlank()) return finish(null)
       finish(null)
-      startTurn(transcript)
+      // With screen sharing on, the request may read the app the user asked from and use other apps.
+      val source = WindowObserver.connected?.activePackage()?.takeIf { it != packageName }
+      startTurn(transcript, source?.takeIf { ScreenConsent.enabled(this@AssistantService) }?.let(ScreenGrants::grant))
     }
 
     /** Callable from any thread. */
@@ -267,12 +272,12 @@ class AssistantService : VoiceInteractionService() {
    * still on screen is quick and replaces it with a card. Once the dot is gone, because the user tapped it or invoked
    * the assistant again, the turn is long-running and its result posts a notification. Logs carry only duration and status.
    */
-  private fun startTurn(transcript: String) {
+  private fun startTurn(transcript: String, screen: ScreenGrants.Grant?) {
     val startedAt = SystemClock.elapsedRealtime()
     val working = showDot(WORKING)
-    VoiceTurns.start(this, transcript) { text, failed ->
+    VoiceTurns.start(this, transcript, screen) { text, failed ->
       val quick = working != null && active === this && overlay === working
-      Log.i(TAG, "turn ms=${SystemClock.elapsedRealtime() - startedAt} failed=$failed quick=$quick")
+      Log.i(TAG, "turn ms=${SystemClock.elapsedRealtime() - startedAt} failed=$failed quick=$quick screen=${screen != null}")
       if (quick) {
         removeOverlay()
         showCard(text)

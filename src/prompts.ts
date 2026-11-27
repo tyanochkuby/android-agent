@@ -1,5 +1,5 @@
-import { contextBudget, runAgent } from './agent';
-import type { AgentTools, Model } from './agent';
+import { contextBudget, runAgent, ScreenAccessEnded } from './agent';
+import type { AgentTools, Model, Screen } from './agent';
 import { chatgpt } from './chatgpt';
 import { companion } from './companion';
 import { conversation } from './conversation';
@@ -79,7 +79,8 @@ export function connectedModel(
   live?: AbortSignal,
   shareHistory = false,
 ): Model {
-  if (session.chatgpt) return chatgpt.model(session.id, onUsage, live, shareHistory);
+  if (session.chatgpt)
+    return chatgpt.model(session.id, onUsage, live, shareHistory);
   const bridge = companion(pairingCode.trim(), session.id, onUsage);
   return live ? bridge.liveModel(live) : bridge.model;
 }
@@ -106,7 +107,7 @@ async function save(id: string, outcome: Outcome) {
 // turn is never retried. `tools` receives the turn ID. Call inside `exclusive`.
 export async function ask(
   message: string,
-  shareScreen: boolean,
+  screen: Screen,
   tools: (turn: string) => AgentTools,
 ) {
   compactor.report(undefined);
@@ -148,7 +149,7 @@ export async function ask(
         message,
         model,
         tools(id),
-        shareScreen,
+        screen,
         shareHistory
           ? await conversation.context(model, budget)
           : await conversation.since(
@@ -162,7 +163,17 @@ export async function ask(
   } catch (error) {
     compactor.report(undefined);
     // Like a failed typed prompt, any failure ends the connection and its history consent.
-    if (config.session) await settings.disconnect().catch(() => {});
+    if (
+      config.session &&
+      !(error instanceof ScreenAccessEnded) &&
+      !(
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'screen_sharing_off'
+      )
+    ) {
+      await settings.disconnect().catch(() => {});
+    }
     outcome = {
       failure:
         (error instanceof Error && error.message.trim()) ||

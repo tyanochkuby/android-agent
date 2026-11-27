@@ -16,6 +16,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private const val AUTHORIZE_URL = "$ISSUER/api/accounts/authorize"
 private const val TOKEN_URL = "$ISSUER/api/accounts/oauth/token"
@@ -36,7 +40,12 @@ class Status(val account: String, val email: String?, val signedIn: Boolean)
  * Signs in with ChatGPT on this device and answers prompts on the account's plan.
  * Credentials never leave this class, and no token or reply text is logged.
  */
-class ChatGPT(context: Context, private val clock: () -> Long = System::currentTimeMillis) {
+/** [screenshot] reads a stored screenshot by owner and ID for image input. */
+class ChatGPT(
+  context: Context,
+  private val screenshot: (owner: String, id: String) -> ByteArray? = { _, _ -> null },
+  private val clock: () -> Long = System::currentTimeMillis,
+) {
   private val vault = Vault(context)
   // Serializes refreshes and account changes, so a rotated refresh token is used once.
   private val lock = Mutex()
@@ -82,18 +91,32 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
    * Returns null input tokens when the reply did not report usage.
    */
   suspend fun respond(
-    subject: String, instructions: String, input: String, canSendHistory: () -> Boolean,
+    subject: String, instructions: String, input: String, canSendScreen: (String?) -> Boolean, canSendHistory: () -> Boolean,
   ): Reply = authorized { account, token ->
     if (account.subject != subject) {
       throw ChatGPTException("account_changed", "The ChatGPT account changed. Continue with ChatGPT again.")
     }
     val model = account.model ?: throw ChatGPTException("not_connected", "Continue with ChatGPT in Android Agent.")
-    val body = responsesBody(model, instructions, Json.parseToJsonElement(input) as JsonArray)
+    val messages = Json.parseToJsonElement(input) as JsonArray
+    val screenMessages = messages.filter {
+      it.jsonObject["screenData"]?.jsonPrimitive?.booleanOrNull == true || it.jsonObject["screenshot"] != null
+    }
+    val body = responsesBody(model, instructions, messages) {
+      screenshot("chatgpt:$subject", it)
+    }
     withContext(Dispatchers.IO) {
       if (!canSendHistory()) {
         throw ChatGPTException("history_sharing_off", "Sharing earlier conversation is off.")
       }
-      request("$RESOURCE/responses", token, body) { readResponseStream(it.inputStream.bufferedReader()) }
+      val checkScreenAccess = {
+        if (screenMessages.any { !canSendScreen(it.jsonObject["screenGrant"]?.jsonPrimitive?.contentOrNull) }) {
+          throw ChatGPTException("screen_sharing_off", "Screen access for this request ended.")
+        }
+      }
+      checkScreenAccess()
+      request("$RESOURCE/responses", token, body, checkScreenAccess) {
+        readResponseStream(it.inputStream.bufferedReader())
+      }
     }
   }
 
@@ -284,7 +307,7 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
   }
 
   /** An authorized API call. Throws [Unauthorized] on 401 so the caller can refresh and retry. */
-  private fun <T> request(url: String, token: String, body: String?, read: (HttpURLConnection) -> T): T {
+  private fun <T> request(url: String, token: String, body: String?, beforeWrite: () -> Unit = {}, read: (HttpURLConnection) -> T): T {
     val connection = open(url, if (body == null) "GET" else "POST")
     try {
       connection.setRequestProperty("Authorization", "Bearer $token")
@@ -292,7 +315,7 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("Accept", "text/event-stream")
         connection.readTimeout = 180_000
-        send(connection, body)
+        send(connection, body, beforeWrite)
       }
       val status = connection.responseCode
       if (status == 401) throw Unauthorized()
@@ -332,11 +355,14 @@ class ChatGPT(context: Context, private val clock: () -> Long = System::currentT
     setRequestProperty("Accept", "application/json")
   }
 
-  private fun send(connection: HttpURLConnection, body: String) {
+  private fun send(connection: HttpURLConnection, body: String, beforeWrite: () -> Unit = {}) {
     val bytes = body.toByteArray()
     connection.doOutput = true
     connection.setFixedLengthStreamingMode(bytes.size)
-    connection.outputStream.use { it.write(bytes) }
+    connection.outputStream.use {
+      beforeWrite()
+      it.write(bytes)
+    }
   }
 
   private fun errorBody(connection: HttpURLConnection): JsonElement? = runCatching {

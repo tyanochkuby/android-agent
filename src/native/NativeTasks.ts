@@ -19,7 +19,11 @@ export interface Spec extends TurboModule {
   waitForTask(id: string): Promise<string>;
   resume(id: string): Promise<string>;
   cancel(id: string): Promise<string>;
-  startUi(app: string): Promise<void>;
+  startUi(
+    app: string,
+    grant: string | null,
+    attachOnly: boolean,
+  ): Promise<void>;
   observeUi(): Promise<string | null>;
   actUi(
     snapshot: string,
@@ -28,6 +32,14 @@ export interface Spec extends TurboModule {
     text: string | null,
   ): Promise<string>;
   stopUi(): Promise<void>;
+  // "true" or "false".
+  beginTypedScreenAccess(): Promise<string | null>;
+  endTypedScreenAccess(grant: string): Promise<void>;
+  screenSharing(): Promise<string>;
+  setScreenSharing(enabled: boolean): Promise<void>;
+  screenAccessActive(grant: string | null): Promise<string>;
+  captureUi(): Promise<string | null>;
+  listScreenshots(grant: string | null): Promise<string>;
   openAccessibilitySettings(): Promise<void>;
   readSettings(): Promise<string | null>;
   saveSettings(settings: string): Promise<void>;

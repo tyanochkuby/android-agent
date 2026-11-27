@@ -45,7 +45,7 @@ export const chatgpt = {
     signal?: AbortSignal,
     shareHistory = false,
   ): Model {
-    return async (instructions, input) => {
+    const respond: Model = async (instructions, input) => {
       if (signal?.aborted) throw new Error('The request was cancelled.');
       const result: { text: string; inputTokens: number | null } = JSON.parse(
         await NativeTasks.chatgptRespond(
@@ -59,5 +59,7 @@ export const chatgpt = {
       onUsage?.(result.inputTokens ?? undefined);
       return result.text;
     };
+    // Native code reads each attached screenshot for this account.
+    return Object.assign(respond, { images: true });
   },
 };

@@ -15,6 +15,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -221,5 +223,22 @@ class ProtocolTest {
   private fun send(port: Int, target: String, host: String) = Socket("127.0.0.1", port).use { socket ->
     socket.getOutputStream().write("GET $target HTTP/1.1\r\nHost: $host\r\n\r\n".toByteArray())
     socket.getInputStream().bufferedReader().readLine()
+  }
+
+  @Test
+  fun `a user message with a screenshot ID carries that image`() {
+    val input = buildJsonArray {
+      add(buildJsonObject { put("role", "user"); put("content", "Look"); put("screenshot", "s-1") })
+      add(buildJsonObject { put("role", "assistant"); put("content", "Ok"); put("screenshot", "s-1") })
+      add(buildJsonObject { put("role", "user"); put("content", "Gone"); put("screenshot", "s-2") })
+    }
+    val body = Json.parseToJsonElement(responsesBody("m", "i", input) { id -> byteArrayOf(1, 2).takeIf { id == "s-1" } })
+    val messages = body.jsonObject["input"]!!.jsonArray.map { it.jsonObject }
+    val parts = messages[0]["content"]!!.jsonArray.map { it.jsonObject }
+    assertEquals("input_text", parts[0]["type"]!!.jsonPrimitive.content)
+    assertEquals("Look", parts[0]["text"]!!.jsonPrimitive.content)
+    assertEquals("data:image/jpeg;base64,AQI=", parts[1]["image_url"]!!.jsonPrimitive.content)
+    assertEquals("Ok", messages[1]["content"]!!.jsonPrimitive.content)
+    assertEquals("Gone", messages[2]["content"]!!.jsonPrimitive.content)
   }
 }

@@ -16,7 +16,7 @@ export async function runUiWorkflow<T>(
     setText: (selection: Selection, text: string) => Promise<string>;
   }) => Promise<T>,
 ): Promise<T> {
-  await NativeTasks.startUi(app);
+  await NativeTasks.startUi(app, null, false);
   try {
     return await work({
       async waitFor(predicate) {

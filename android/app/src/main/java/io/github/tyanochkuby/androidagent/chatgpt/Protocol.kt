@@ -16,6 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
@@ -205,15 +206,34 @@ fun firstModel(body: JsonElement): Model {
 }
 
 /** The Responses request body. This flow requires `store: false` and `stream: true`. */
-fun responsesBody(model: String, instructions: String, input: JsonArray) = buildJsonObject {
+/**
+ * A streamed Responses request. A user message with a `screenshot` ID carries that image, read through [screenshot];
+ * an ID it returns null for is sent as text only.
+ */
+fun responsesBody(
+  model: String, instructions: String, input: JsonArray, screenshot: (String) -> ByteArray? = { null },
+) = buildJsonObject {
   put("model", model)
   put("instructions", instructions)
   put("input", buildJsonArray {
     input.forEach { message ->
       val fields = message.jsonObject
+      val role = fields.string("role")
+      val text = fields.string("content")
+      val image = fields["screenshot"]?.jsonPrimitive?.contentOrNull?.takeIf { role == "user" }?.let(screenshot)
       add(buildJsonObject {
-        put("role", fields.string("role"))
-        put("content", fields.string("content"))
+        put("role", role)
+        if (image == null) put("content", text)
+        else put("content", buildJsonArray {
+          add(buildJsonObject {
+            put("type", "input_text")
+            put("text", text)
+          })
+          add(buildJsonObject {
+            put("type", "input_image")
+            put("image_url", "data:image/jpeg;base64,${Base64.Default.encode(image)}")
+          })
+        })
       })
     }
   })

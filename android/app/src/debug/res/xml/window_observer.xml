@@ -2,4 +2,5 @@
     android:accessibilityEventTypes="typeWindowStateChanged|typeTouchInteractionStart"
     android:accessibilityFlags="flagReportViewIds"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/window_observer_description" />

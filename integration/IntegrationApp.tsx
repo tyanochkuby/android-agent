@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
+import NativeTasks from '../src/native/NativeTasks';
 import { openStationDirections } from './mapsWorkflow';
 import { actOn, runUiWorkflow, select } from '../src/uiWorkflow';
 
-function checkFixture() {
+// Matches LONG_TEXT in the fixture app.
+const longText = `Station notes: ${'platform changes are announced on the departure boards. '.repeat(
+  8,
+)}`;
+
+async function checkFixture() {
   return runUiWorkflow('io.github.tyanochkuby.uifixture', async ui => {
     const field = () =>
       ui.waitFor(snapshot =>
@@ -31,6 +37,12 @@ function checkFixture() {
         element => element.label === 'Destination: Central Station',
       ),
     );
+    const notes = await ui.waitFor(snapshot =>
+      select(snapshot, element => element.label.startsWith('Station notes:')),
+    );
+    if (notes.snapshot.elements[notes.index].label !== longText) {
+      throw new Error('Long text was not observed whole.');
+    }
 
     await actOn(
       () =>
@@ -60,6 +72,7 @@ export default function IntegrationApp() {
   async function run(work: () => Promise<unknown>) {
     setStatus('Running');
     try {
+      await NativeTasks.setScreenSharing(true);
       await work();
       console.info('ANDROID_AGENT_INTEGRATION_PASSED');
       setStatus('Integration passed');

@@ -9,8 +9,10 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import io.github.tyanochkuby.androidagent.chatgpt.ChatGPT
 import io.github.tyanochkuby.androidagent.tasks.AndroidActions
 import io.github.tyanochkuby.androidagent.tasks.Conversation
+import io.github.tyanochkuby.androidagent.tasks.Screenshots
 import io.github.tyanochkuby.androidagent.tasks.TaskExecutor
 import io.github.tyanochkuby.androidagent.tasks.TaskJournal
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,7 +23,9 @@ class MainApplication : Application(), ReactApplication {
 
   internal val conversation by lazy { Conversation(taskJournal) }
 
-  internal val chatgpt by lazy { ChatGPT(this) }
+  internal val screenshots by lazy { Screenshots(File(noBackupFilesDir, "screenshots")) }
+
+  internal val chatgpt by lazy { ChatGPT(this, screenshots::read) }
 
   internal val taskExecutor by lazy {
     TaskExecutor(taskJournal, AndroidActions(this), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
